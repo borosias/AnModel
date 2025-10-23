@@ -6,7 +6,6 @@ import os
 import sys
 from pathlib import Path
 
-# Добавляем путь для импорта существующих фич
 project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
@@ -27,6 +26,12 @@ def load_events_from_parquet() -> pd.DataFrame:
 
     events = pd.concat(dfs, ignore_index=True)
     events['ts'] = pd.to_datetime(events['ts'])
+
+    # 🛠️ ИСПРАВЛЕНИЕ: Извлекаем price из properties
+    events['price_value'] = events['properties'].apply(
+        lambda x: x.get('price', 0) if isinstance(x, dict) else 0
+    )
+
     return events.sort_values('ts')
 
 
@@ -36,18 +41,20 @@ def create_time_based_snapshots(events: pd.DataFrame,
                                 test_end: datetime,
                                 window_back_days: int = 30,
                                 window_forward_days: int = 7) -> tuple:
-    """
-    Создает time-based snapshots с учетом существующих фич
-    """
-
-    # Определяем даты снэпшотов (раз в неделю для эффективности)
+    # Определяем даты снэпшотов
     min_date = events['ts'].min().ceil('D')
     max_date = events['ts'].max().floor('D')
+
+    # 🛠️ ИСПРАВЛЕНИЕ: Для одного дня данных используем daily snapshots
+    if (max_date - min_date).days <= 1:
+        freq = "1D"
+    else:
+        freq = "7D"
 
     all_snapshot_dates = pd.date_range(
         start=min_date + timedelta(days=window_back_days),
         end=max_date - timedelta(days=window_forward_days),
-        freq="7D"  # Weekly snapshots
+        freq=freq
     )
 
     # Разделяем на train/val/test
@@ -58,7 +65,6 @@ def create_time_based_snapshots(events: pd.DataFrame,
     print(f"Total snapshots: {len(all_snapshot_dates)}")
     print(f"Train: {len(train_snapshots)}, Val: {len(val_snapshots)}, Test: {len(test_snapshots)}")
 
-    # Создаем снэпшоты
     train_data = _build_snapshots(events, train_snapshots, window_back_days, window_forward_days)
     val_data = _build_snapshots(events, val_snapshots, window_back_days, window_forward_days)
     test_data = _build_snapshots(events, test_snapshots, window_back_days, window_forward_days)
@@ -68,40 +74,33 @@ def create_time_based_snapshots(events: pd.DataFrame,
 
 def _build_snapshots(events: pd.DataFrame, snapshot_dates: list,
                      window_back_days: int, window_forward_days: int) -> pd.DataFrame:
-    """Строит снэпшоты для списка дат"""
-
     snapshots = []
 
     for i, snapshot_date in enumerate(snapshot_dates):
-        if i % 5 == 0:  # Прогресс
+        if i % 5 == 0:
             print(f"  Snapshot {i + 1}/{len(snapshot_dates)}: {snapshot_date.date()}")
 
-        # Временные окна
         feature_start = snapshot_date - timedelta(days=window_back_days)
         feature_end = snapshot_date
         target_start = snapshot_date
         target_end = snapshot_date + timedelta(days=window_forward_days)
 
-        # Данные для фичей (только исторические)
         feature_events = events[
             (events['ts'] >= feature_start) &
             (events['ts'] < feature_end)
             ]
 
-        # Вычисляем фичи (совместимо с существующим build_features.py)
         user_features = _compute_snapshot_features(feature_events, snapshot_date)
 
         if user_features.empty:
             continue
 
-        # Таргеты (будущие события)
         target_events = events[
             (events['ts'] >= target_start) &
             (events['ts'] < target_end)
             ]
         targets = _compute_targets(target_events, user_features.index)
 
-        # Объединяем
         snapshot = user_features.join(targets, how='left').fillna(0)
         snapshot['snapshot_date'] = snapshot_date
         snapshots.append(snapshot.reset_index())
@@ -110,28 +109,23 @@ def _build_snapshots(events: pd.DataFrame, snapshot_dates: list,
 
 
 def _compute_snapshot_features(events: pd.DataFrame, snapshot_date: datetime) -> pd.DataFrame:
-    """Вычисляет фичи на момент снэпшота (совместимо с build_features.py)"""
-
     if events.empty:
         return pd.DataFrame()
 
-    # Базовые фичи как в build_features.py
+    # 🛠️ ИСПРАВЛЕНИЕ: Убрал price из базовой агрегации
     user_features = events.groupby('user_id').agg({
         'event_id': 'count',
-        'ts': 'max',
-        'price': 'sum'
+        'ts': 'max'
     }).rename(columns={
         'event_id': 'total_events',
-        'ts': 'last_event_ts',
-        'price': 'total_spent'
+        'ts': 'last_event_ts'
     })
 
-    # Recency (аналогично days_since_last_event из build_features)
     user_features['days_since_last_event'] = (
             snapshot_date - user_features['last_event_ts']
     ).dt.days
 
-    # Event type counts (аналогично is_purchase, is_view)
+    # Event type counts
     event_counts = events.pivot_table(
         index='user_id',
         columns='event_type',
@@ -142,38 +136,40 @@ def _compute_snapshot_features(events: pd.DataFrame, snapshot_date: datetime) ->
     event_counts = event_counts.add_prefix('count_')
     user_features = user_features.join(event_counts, how='left')
 
-    # Purchase-specific features
+    # 🛠️ ИСПРАВЛЕНИЕ: Purchase features с правильным price_value
     purchases = events[events['event_type'] == 'purchase']
     if not purchases.empty:
         purchase_features = purchases.groupby('user_id').agg({
             'event_id': 'count',
-            'price': ['sum', 'mean', 'std']
+            'price_value': ['sum', 'mean']  # 🛠️ Используем price_value вместо price
         })
-        purchase_features.columns = [
-            'purchase_count',
-            'total_spent_purchases',
-            'avg_purchase_value',
-            'std_purchase_value'
-        ]
+        # 🛠️ ИСПРАВЛЕНИЕ: Правильное именование колонок
+        purchase_features.columns = ['purchase_count', 'total_spent', 'avg_purchase_value']
         user_features = user_features.join(purchase_features, how='left')
 
-    # Session features (совместимо с session_features.parquet)
+    # 🛠️ ИСПРАВЛЕНИЕ: Session features с правильным переименованием
     session_features = events.groupby(['user_id', 'session_id']).agg({
-        'ts': ['min', 'max', 'count']
+        'ts': 'min',
+        'event_id': 'count'
     }).reset_index()
-    session_features.columns = ['user_id', 'session_id', 'session_start', 'session_end', 'session_events']
 
-    user_session_features = session_features.groupby('user_id').agg({
-        'session_events': ['mean', 'max', 'sum'],
-        'session_id': 'count'
+    session_agg = session_features.groupby('user_id').agg({
+        'ts': ['min', 'max'],  # session_start, session_end
+        'event_id': ['count', 'mean', 'max']  # session_events, avg, max
     })
-    user_session_features.columns = [
-        'avg_session_events',
-        'max_session_events',
-        'total_session_events',
-        'total_sessions'
+
+    # 🛠️ ИСПРАВЛЕНИЕ: Правильное flattening MultiIndex
+    session_agg.columns = [
+        'session_start', 'session_end',
+        'total_session_events', 'avg_session_events', 'max_session_events'
     ]
-    user_features = user_features.join(user_session_features, how='left')
+
+    session_agg['total_sessions'] = session_features.groupby('user_id')['session_id'].nunique()
+    session_agg['session_length_hours'] = (
+                                                  session_agg['session_end'] - session_agg['session_start']
+                                          ).dt.total_seconds() / 3600
+
+    user_features = user_features.join(session_agg, how='left')
 
     # Заполняем пропуски и чистим
     user_features = user_features.fillna(0)
@@ -183,9 +179,6 @@ def _compute_snapshot_features(events: pd.DataFrame, snapshot_date: datetime) ->
 
 
 def _compute_targets(target_events: pd.DataFrame, user_index: pd.Index) -> pd.DataFrame:
-    """Вычисляет таргеты - совместимо с существующей логикой"""
-
-    # Основной таргет: покупка в целевом окне
     purchases = target_events[target_events['event_type'] == 'purchase']
 
     targets = pd.DataFrame(index=user_index)
@@ -194,12 +187,13 @@ def _compute_targets(target_events: pd.DataFrame, user_index: pd.Index) -> pd.Da
     targets['target_spent'] = 0
 
     if not purchases.empty:
+        # 🛠️ ИСПРАВЛЕНИЕ: Используем price_value
         purchase_stats = purchases.groupby('user_id').agg({
             'event_id': 'count',
-            'price': 'sum'
+            'price_value': 'sum'
         }).rename(columns={
             'event_id': 'target_purchase_count',
-            'price': 'target_spent'
+            'price_value': 'target_spent'
         })
 
         targets.loc[purchase_stats.index, 'target_purchase'] = 1
@@ -210,9 +204,6 @@ def _compute_targets(target_events: pd.DataFrame, user_index: pd.Index) -> pd.Da
 
 
 def validate_and_save(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame, output_dir: str):
-    """Валидация и сохранение снэпшотов"""
-
-    # Создаем директорию
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     print("\n=== Validation ===")
@@ -221,7 +212,6 @@ def validate_and_save(train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.
             pos_rate = df['target_purchase'].mean() * 100
             print(f"{name}: {len(df):,} samples, {pos_rate:.2f}% positive")
 
-    # Сохраняем
     train_df.to_parquet(f"{output_dir}/train.parquet", index=False)
     val_df.to_parquet(f"{output_dir}/val.parquet", index=False)
     test_df.to_parquet(f"{output_dir}/test.parquet", index=False)
@@ -239,23 +229,20 @@ def main():
     parser.add_argument('--test-end', type=str, required=True, help='Test end date (YYYY-MM-DD)')
     parser.add_argument('--window-back', type=int, default=30, help='Feature window in days')
     parser.add_argument('--window-forward', type=int, default=7, help='Target window in days')
-    parser.add_argument('--output-dir', type=str, default='data/snapshots', help='Output directory')
+    parser.add_argument('--output-dir', type=str, default='src/analytics/data/snapshots', help='Output directory')
 
     args = parser.parse_args()
 
     print("=== Time-based Snapshot Builder ===")
     print(f"Loading existing data from src/analytics/data/parquet/")
 
-    # Загружаем данные
     events = load_events_from_parquet()
     print(f"Loaded {len(events):,} events from {events['ts'].min()} to {events['ts'].max()}")
 
-    # Парсим даты
     train_end = pd.to_datetime(args.train_end)
     val_end = pd.to_datetime(args.val_end)
     test_end = pd.to_datetime(args.test_end)
 
-    # Строим снэпшоты
     print("\nBuilding snapshots...")
     train_df, val_df, test_df = create_time_based_snapshots(
         events=events,
@@ -266,7 +253,6 @@ def main():
         window_forward_days=args.window_forward
     )
 
-    # Сохраняем
     validate_and_save(train_df, val_df, test_df, args.output_dir)
 
 

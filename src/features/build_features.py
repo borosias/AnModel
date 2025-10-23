@@ -5,8 +5,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import pyarrow.parquet as pq
 
-PARQUET_DIR = os.getenv("PARQUET_IN", "../analytics/data/parquet")
-OUT_DIR = os.getenv("FEATURES_OUT", "data/features")
+PARQUET_DIR = os.getenv("PARQUET_IN", "src/analytics/data/parquet")
+OUT_DIR = os.getenv("FEATURES_OUT", "src/features/data/features")
 os.makedirs(OUT_DIR, exist_ok=True)
 
 

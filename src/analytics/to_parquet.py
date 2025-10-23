@@ -10,7 +10,7 @@ CH_PORT = int(os.getenv("CLICKHOUSE_PORT", 9000))
 CH_DB = os.getenv("CLICKHOUSE_DB", "analytics")
 CH_USER = os.getenv("CLICKHOUSE_USER", "admin")
 CH_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "admin")
-OUT_DIR = os.getenv("PARQUET_OUT", "./data/parquet")
+OUT_DIR = os.getenv("PARQUET_OUT", "src/analytics/data/parquet")
 BATCH = int(os.getenv("PARQUET_BATCH", 100000))
 DAYS = int(os.getenv("EXPORT_DAYS", 30))
 
