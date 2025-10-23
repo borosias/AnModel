@@ -15,7 +15,7 @@ class Event(BaseModel):
 
 app = FastAPI()
 producer = None
-KAFKA_BOOTSTRAP = "kafka:9092"
+KAFKA_BOOTSTRAP = "localhost:9092"
 TOPIC = "raw-events"
 
 @app.on_event("startup")
