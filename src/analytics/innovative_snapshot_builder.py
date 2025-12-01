@@ -1750,7 +1750,7 @@ class InnovativeSnapshotBuilder:
 
     def save_all_snapshots(self, snapshots_dict: Dict,
                            output_dir: str = "../analytics/data/innovative_snapshots"):
-        """Сохраняет все снапшоты"""
+        """Сохраняет все снапшоты с фиксом типов данных"""
 
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
@@ -1761,6 +1761,24 @@ class InnovativeSnapshotBuilder:
 
             for dataset_name, df in datasets.items():
                 if not df.empty:
+                    # ФИКС: Преобразуем все булевые колонки в int
+                    for col in df.select_dtypes(include=['bool']).columns:
+                        df[col] = df[col].astype(int)
+
+                    # ФИКС: Преобразуем object колонки с булевыми значениями
+                    for col in df.select_dtypes(include=['object']).columns:
+                        if df[col].dropna().empty:
+                            continue
+                        # Проверяем, содержит ли колонка булевые значения
+                        unique_vals = df[col].dropna().unique()
+                        if set(unique_vals).issubset({True, False, 0, 1, 'True', 'False', 'true', 'false'}):
+                            # Преобразуем в int
+                            df[col] = df[col].replace({
+                                'True': 1, 'False': 0,
+                                'true': 1, 'false': 0,
+                                True: 1, False: 0
+                            }).astype(int)
+
                     file_path = model_dir / f"{dataset_name}.parquet"
                     df.to_parquet(file_path, index=False)
 
@@ -1771,7 +1789,7 @@ class InnovativeSnapshotBuilder:
                         'model': model_name,
                         'dataset': dataset_name,
                         'rows': len(df),
-                        'columns': df.columns.tolist(),  # Первые 20 колонок
+                        'columns': df.columns.tolist()[:20],
                         'saved_at': datetime.now().isoformat()
                     }
 
