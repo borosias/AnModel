@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from typing import List
 
 import aiohttp
-from aiohttp import ClientConnectorError, ClientResponseError
+
+from postgres_load import load_users
 
 # -- Конфигурация списка сущностей (не меняем формат полей!) --
 ITEMS = [f"item_{i}" for i in range(1, 201)]
@@ -46,18 +47,19 @@ def make_event(user_id: str, session_id: str, event_type: str) -> dict:
 
 # ----------------- Async sender with retries -----------------
 async def post_event(session: aiohttp.ClientSession, url: str, payload: dict, timeout: float, retries: int = 2) -> bool:
-    data = json.dumps(payload, ensure_ascii=False)
     backoff = 0.5
     for attempt in range(retries + 1):
         try:
-            async with session.post(url, data=data, headers={"Content-Type": "application/json"}, timeout=timeout) as resp:
+            # Use json= to let aiohttp handle encoding and headers
+            async with session.post(url, json=payload, timeout=timeout) as resp:
                 if resp.status in (200, 201, 202):
                     return True
                 # treat 4xx/5xx as error to retry (except some 4xx maybe)
                 text = await resp.text()
                 logger.debug(f"bad status {resp.status}: {text}")
-        except (ClientConnectorError, asyncio.TimeoutError, ClientResponseError) as ex:
-            logger.debug(f"request error: {ex}")
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionResetError, OSError) as ex:
+            # WinError 64 (network name no longer available) maps to OSError on Windows
+            logger.debug(f"request error (will retry if attempts left): {ex}")
         if attempt < retries:
             await asyncio.sleep(backoff)
             backoff *= 2
@@ -102,7 +104,6 @@ async def produce_for_user(
 # ----------------- Main orchestrator -----------------
 async def run_generation(
     url: str,
-    total_users: int,
     events_per_user: int,
     concurrency: int,
     delay_between_events: float,
@@ -115,16 +116,18 @@ async def run_generation(
     event_distribution = [0.25, 0.25, 0.10, 0.02, 0.20, 0.18]
 
     sem = asyncio.Semaphore(concurrency)
-    timeout_obj = aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=5)
+    # Respect provided timeout for read operations; leave total unlimited to allow streaming batches
+    timeout_obj = aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=timeout)
 
     counters = {"sent": 0, "ok": 0, "err": 0}
     start_t = time.time()
 
-    conn = aiohttp.TCPConnector(limit=concurrency * 2, force_close=False)
+    # enable_cleanup_closed helps avoid ConnectionResetError on Windows when peers close abruptly
+    conn = aiohttp.TCPConnector(limit=concurrency * 2, force_close=False, enable_cleanup_closed=True, ttl_dns_cache=10)
     async with aiohttp.ClientSession(connector=conn, timeout=timeout_obj) as session:
         tasks = []
-        for _ in range(total_users):
-            user = f"user_{random.randint(1, 1000000)}"
+        user_ids = load_users()
+        for user in user_ids:
             t = asyncio.create_task(
                 produce_for_user(
                     user,
@@ -142,7 +145,9 @@ async def run_generation(
             tasks.append(t)
             # throttle creation of tasks to avoid burst memory use
             if len(tasks) >= concurrency * 4:
-                _done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                # asyncio.wait returns sets; keep pending tasks and continue adding to a list
+                tasks = list(pending)
         if tasks:
             await asyncio.gather(*tasks)
 
@@ -153,18 +158,17 @@ async def run_generation(
 def parse_args():
     p = argparse.ArgumentParser(description="High-throughput event generator (compatible with schema)")
     p.add_argument("--url", default="http://localhost:8000/collect", help="Collector URL")
-    p.add_argument("--users", type=int, default=200, help="Number of users to simulate")
     p.add_argument("--events-per-user", type=int, default=200, help="Events per user")
     p.add_argument("--concurrency", type=int, default=100, help="Concurrent inflight HTTP requests")
-    p.add_argument("--delay", type=float, default=0.0, help="Delay between events per user (seconds)")
+    p.add_argument("--delay", type=float, default=0.1, help="Delay between events per user (seconds)")
     p.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout (seconds)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p.parse_args()
 
 def main():
     args = parse_args()
-    logger.info(f"Starting generator: users={args.users} events_per_user={args.events_per_user} concurrency={args.concurrency} delay={args.delay}")
-    asyncio.run(run_generation(args.url, args.users, args.events_per_user, args.concurrency, args.delay, args.timeout, args.seed))
+    logger.info(f"Starting generator: events_per_user={args.events_per_user} concurrency={args.concurrency} delay={args.delay}")
+    asyncio.run(run_generation(args.url, args.events_per_user, args.concurrency, args.delay, args.timeout, args.seed))
 
 if __name__ == "__main__":
     main()
