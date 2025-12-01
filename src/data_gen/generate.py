@@ -6,7 +6,7 @@ import random
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List
 
 import aiohttp
@@ -30,10 +30,17 @@ logger = logging.getLogger("data-gen")
 # ----------------- Event factory (строго сохраняет структуру) -----------------
 def make_event(user_id: str, session_id: str, event_type: str) -> dict:
     item = random.choice(ITEMS)
+    # Randomize timestamp within the last ~1 year (365 days)
+    now = datetime.now(timezone.utc)
+    year_ago = now - timedelta(days=365)
+    # total seconds between now and year_ago; choose a random offset
+    total_sec = int((now - year_ago).total_seconds())
+    rand_sec = random.randint(0, total_sec)
+    ts = (year_ago + timedelta(seconds=rand_sec)).isoformat()
     ev = {
         "event_id": str(uuid.uuid4()),
         "event_type": event_type,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": ts,
         "session_id": session_id,
         "user_id": user_id,
         "region": random.choice(REGIONS),
@@ -160,7 +167,7 @@ def parse_args():
     p.add_argument("--url", default="http://localhost:8000/collect", help="Collector URL")
     p.add_argument("--events-per-user", type=int, default=200, help="Events per user")
     p.add_argument("--concurrency", type=int, default=100, help="Concurrent inflight HTTP requests")
-    p.add_argument("--delay", type=float, default=0.1, help="Delay between events per user (seconds)")
+    p.add_argument("--delay", type=float, default=0.0, help="Delay between events per user (seconds)")
     p.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout (seconds)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p.parse_args()

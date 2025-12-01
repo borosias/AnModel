@@ -1,5 +1,13 @@
 # AnModel
 
+Порядок запуску:
+1) Докер
+2) Инфра
+3) Колектор
+4) Консумер
+5) Дата генератор
+6) 
+
 ```
 python -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\activate
@@ -22,3 +30,4 @@ python src/consumer/consumer.py
 ```
 python src/data_gen/generate.py
 ```
+
