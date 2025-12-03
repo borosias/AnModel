@@ -13,7 +13,6 @@ import aiohttp
 
 from postgres_load import load_users
 
-# -- Конфигурация списка сущностей (не меняем формат полей!) --
 ITEMS = [f"item_{i}" for i in range(1, 201)]
 REGIONS = ["UA-30", "UA-40", "UA-50"]
 EVENTS = ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]

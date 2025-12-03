@@ -2,12 +2,11 @@
 import os
 import pandas as pd
 
-from models.models.context_aware import ContextAwareModel
+from src.models import ContextAwareModel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT_DIR = os.path.join(BASE_DIR, "..", "..", "analytics", "data", "snapshots", "model1")
 MODEL_PATH = os.path.join(BASE_DIR, "..", "production_models", "context_aware_model1.pkl")
-
 
 def load_dataset(name: str) -> pd.DataFrame:
     path = os.path.join(SNAPSHOT_DIR, f"{name}.parquet")
