@@ -10,8 +10,9 @@ import sys
 from contextlib import asynccontextmanager
 from enum import Enum
 from importlib import import_module
-from typing import Any
+from typing import Any, Optional
 
+import asyncpg
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,6 +26,14 @@ if SRC_DIR not in sys.path:
 
 MODELS_DIR = os.path.join(SRC_DIR, "models", "production_models")
 DEFAULT_CONTEXT_AWARE_PATH = os.path.join(MODELS_DIR, "context_aware_model1.pkl")
+SNAPSHOT_PATH = sorted(
+    [os.path.join(SRC_DIR, "analytics", "data", "daily_features", f, "daily_snapshot1.parquet")
+     for f in os.listdir(os.path.join(SRC_DIR, "analytics", "data", "daily_features"))],
+    reverse=True
+)[0]
+
+daily_snapshot = pd.read_parquet(SNAPSHOT_PATH)
+daily_snapshot.set_index("user_id", inplace=True)
 
 
 # ===== Pydantic-схемы =====
@@ -89,6 +98,36 @@ class ErrorResponse(BaseModel):
     """Ответ с ошибкой."""
     error: str
     details: str | None = None
+
+
+class UserDataRequest(BaseModel):
+    """Запрос данных пользователя."""
+    days: int = Field(default=30, ge=1, le=365)
+    model: str = Field(default="context_aware", description="Имя модели для которой нужны фичи")
+
+
+class UserFeaturesResponse(BaseModel):
+    """Ответ с фичами пользователя."""
+    user_id: int
+    features: dict[str, Any]
+
+
+class UserSearchResponse(BaseModel):
+    """Ответ при поиске пользователей."""
+    users: list[dict[str, Any]]
+
+
+class User(BaseModel):
+    user_id: str
+    name: Optional[str]
+    email: Optional[str]
+
+    events_per_day: Optional[float]
+    total_events: Optional[int]
+    total_purchases: Optional[int]
+    distinct_items: Optional[int]
+    days_since_last: Optional[int]
+    avg_spend_per_purchase_30d: Optional[float]
 
 
 # ===== Сервис моделей =====
@@ -274,6 +313,7 @@ async def get_model_info(service_name: str):
 
     return info
 
+
 @app.post(
     "/predict",
     response_model=PredictResponse,
@@ -308,6 +348,16 @@ async def predict(
     return PredictResponse(predictions=predictions)
 
 
+async def get_pool():
+    return await asyncpg.create_pool(
+        user="postgres",
+        password="postgres",
+        database="postgres",
+        host="localhost",
+        port=5432
+    )
+
+
 @app.post(
     "/predict/{service_name}",
     response_model=PredictResponse,
@@ -332,6 +382,104 @@ async def predict_by_service(service_name: str, request: PredictRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     return PredictResponse(predictions=predictions)
+
+
+@app.get("/users/search", response_model=UserSearchResponse, tags=["Users"])
+async def search_users(
+        query: str = Query(..., description="Поисковый запрос (ID)"),
+        limit: int = Query(10, ge=1, le=100, description="Лимит результатов")
+):
+    """
+    Поиск пользователей в БД.
+    В реальном приложении здесь будет подключение к БД.
+    """
+    # Заглушка - в реальном приложении будет запрос к БД
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT user_uid
+            FROM users
+            WHERE cast(user_uid as text) ILIKE $1
+            ORDER BY user_uid
+            LIMIT $2
+            """,
+            f"%{query}%",
+            limit
+        )
+
+    users = []
+    for r in rows:
+        user_id = r["user_id"]
+        features = daily_snapshot.loc[user_id] if user_id in daily_snapshot.index else {}
+        users.append(
+            User(
+                user_id=user_id,
+                name=r["name"],
+                email=r["email"],
+                events_per_day=features.get("events_per_day"),
+                total_events=features.get("total_events"),
+                total_purchases=features.get("total_purchases"),
+                distinct_items=features.get("distinct_items"),
+                days_since_last=features.get("days_since_last"),
+                avg_spend_per_purchase_30d=features.get("total_spent") / max(1, features.get("total_purchases", 0))
+            )
+        )
+
+    return UserSearchResponse(users=users)
+
+
+@app.get("/user/{user_id}/features", response_model=UserFeaturesResponse, tags=["Users"])
+async def get_user_features(
+        user_id: int,
+        days: int = Query(30, ge=1, le=365),
+        model: str = Query("context_aware")
+):
+    """
+    Получить фичи пользователя за указанный период.
+    В реальном приложении здесь будет расчет фичей из БД.
+    """
+    try:
+        # Получаем модель для получения списка требуемых фичей
+        model_service = get_service(model)
+        model_obj = model_service.model
+
+        # Получаем список фичей модели
+        required_features = []
+        if hasattr(model_obj, "feature_columns_") and model_obj.feature_columns_ is not None:
+            required_features = model_obj.feature_columns_.tolist()
+
+        # В реальном приложении здесь будет запрос к БД для расчета фичей
+        # Для демо используем случайные значения
+
+        import random
+        features = {}
+
+        for feature in required_features:
+            if feature == "total_events":
+                features[feature] = random.randint(0, 200)
+            elif feature == "total_purchases":
+                features[feature] = random.randint(0, 20)
+            elif feature == "days_since_last":
+                features[feature] = random.randint(0, 30)
+            elif feature == "avg_spend_per_purchase_30d":
+                features[feature] = round(random.uniform(100, 2000), 2)
+            else:
+                # Для остальных фичей генерируем случайные значения
+                features[feature] = round(random.uniform(0, 1000), 2)
+
+        return UserFeaturesResponse(
+            user_id=user_id,
+            features=features
+        )
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Помилка отримання даних користувача: {str(e)}"
+        )
 
 
 # ===== Запуск через uvicorn =====
