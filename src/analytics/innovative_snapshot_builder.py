@@ -311,7 +311,6 @@ class InnovativeSnapshotBuilder:
 
         print(f"📂 Loading {len(parquet_files)} parquet files...")
 
-        # Быстрая загрузка первых 5 файлов (для демо)
         dfs = []
         for file in parquet_files:
             df = pd.read_parquet(file)

@@ -80,8 +80,19 @@ class OneTimeTrendsLoader:
             df = pd.DataFrame(all_trends)
             df = self._add_features(df)
 
+            # НОРМАЛИЗУЕМ СХЕМУ ДЛЯ parquet
+            df['date'] = pd.to_datetime(df['date']).dt.normalize()
+            df['popularity'] = pd.to_numeric(df['popularity'], errors='coerce').fillna(0).astype(int)
+
+            # Убедимся, что базовые колонки присутствуют
+            base_cols = ['date', 'query', 'region', 'popularity']
+            for col in base_cols:
+                if col not in df.columns:
+                    logger.warning(f"Missing column '{col}' in trends data — adding empty")
+                    df[col] = None
+
             master_file = self.storage_path / "trends_master.parquet"
-            df.to_parquet(master_file)
+            df.to_parquet(master_file, index=False)
             logger.info(f"✅ Saved {len(df)} records to {master_file}")
 
             return df

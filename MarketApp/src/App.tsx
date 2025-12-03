@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import './App.css'
 
+/**
+ * Базовые типы для метрик дашборда
+ */
 type Metric = {
   label: string
   value: number
@@ -13,12 +16,43 @@ type Trend = { name: string; change: number; series: number[] }
 type User = { id: string; name: string }
 type Recommendation = { title: string; description: string; impact: 'low' | 'medium' | 'high' }
 
-// Helpers
+/**
+ * Типы для работы с моделями
+ */
+type ModelId = 'context_aware' | string
+
+type ModelInfo = {
+  id: ModelId
+  name: string
+  description: string
+}
+
+/**
+ * Ответ предикта для любой модели.
+ * Для конкретной модели можно сузить тип, но базово оставляем generic.
+ */
+type PredictionRecord = {
+  [key: string]: unknown
+}
+
+/**
+ * Ответ API /predict
+ */
+type PredictResponse = {
+  predictions: PredictionRecord[]
+}
+
+/**
+ * Хелперы форматирования
+ */
 const nf = new Intl.NumberFormat('ru-RU')
 const pf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 })
 const kfmt = (n: number) =>
   n >= 1_000_000 ? `${pf.format(n / 1_000_000)}M` : n >= 1_000 ? `${pf.format(n / 1_000)}K` : nf.format(n)
 
+/**
+ * Компоненты UI
+ */
 function DeltaBadge({ value }: { value: number }) {
   const up = value >= 0
   return (
@@ -28,7 +62,17 @@ function DeltaBadge({ value }: { value: number }) {
   )
 }
 
-function Sparkline({ data, width = 120, height = 36, color = '#7c3aed' }: { data: number[]; width?: number; height?: number; color?: string }) {
+function Sparkline({
+  data,
+  width = 120,
+  height = 36,
+  color = '#7c3aed',
+}: {
+  data: number[]
+  width?: number
+  height?: number
+  color?: string
+}) {
   const max = Math.max(...data)
   const min = Math.min(...data)
   const range = max - min || 1
@@ -46,7 +90,17 @@ function Sparkline({ data, width = 120, height = 36, color = '#7c3aed' }: { data
   )
 }
 
-function LineChart({ series, width = 820, height = 220, color = '#22c55e' }: { series: SeriesPoint[]; width?: number; height?: number; color?: string }) {
+function LineChart({
+  series,
+  width = 820,
+  height = 220,
+  color = '#22c55e',
+}: {
+  series: SeriesPoint[]
+  width?: number
+  height?: number
+  color?: string
+}) {
   const values = series.map((p) => p.value)
   const max = Math.max(...values)
   const min = Math.min(...values)
@@ -89,7 +143,46 @@ function LineChart({ series, width = 820, height = 220, color = '#22c55e' }: { s
   )
 }
 
+/**
+ * Клиент для API моделей
+ * Внутри зашит префикс /api — в dev его проксирует Vite на Python‑сервер.
+ */
+async function callPredictApi(modelId: ModelId, record: Record<string, unknown>): Promise<PredictionRecord> {
+  const resp = await fetch('/api/predict', {
+    method: 'POST',
+    headers: { ContentType: 'application/json',},
+    body: JSON.stringify({
+      model_id: modelId,
+      records: [record],
+    }),
+  })
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    throw new Error(`HTTP ${resp.status}${text ? `: ${text}` : ''}`)
+  }
+
+  const data = (await resp.json()) as PredictResponse
+  if (!data.predictions || data.predictions.length === 0) {
+    throw new Error('Сервер вернул пустой список предсказаний')
+  }
+  return data.predictions[0]
+}
+
 function App() {
+  /**
+   * Модели: сейчас одна, но структура сразу позволяет добавлять другие.
+   */
+  const models: ModelInfo[] = [
+    {
+      id: 'context_aware',
+      name: 'ContextAware · Покупка в 7 дней',
+      description: 'Вероятность покупки, дни до покупки и сумма следующей покупки.',
+    },
+    // Пример на будущее:
+    // { id: 'another_model', name: 'Другая модель', description: 'Описание другой модели.' },
+  ]
+
   // Mock users
   const users: User[] = [
     { id: 'u1', name: 'Алексей' },
@@ -154,8 +247,61 @@ function App() {
     ],
   }
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reco'>('dashboard')
+  /**
+   * State
+   */
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reco' | 'models'>('dashboard')
   const [selectedUser, setSelectedUser] = useState<User>(users[0])
+
+  // Выбор модели
+  const [selectedModelId, setSelectedModelId] = useState<ModelId>(models[0]?.id ?? 'context_aware')
+
+  // Поля для скоринга context_aware (можно расширять)
+  const [totalEvents, setTotalEvents] = useState('100')
+  const [totalPurchases, setTotalPurchases] = useState('3')
+  const [daysSinceLast, setDaysSinceLast] = useState('5')
+  const [avgSpend30d, setAvgSpend30d] = useState('1200')
+
+  const [prediction, setPrediction] = useState<PredictionRecord | null>(null)
+  const [loadingPredict, setLoadingPredict] = useState(false)
+  const [predictError, setPredictError] = useState<string | null>(null)
+
+  const selectedModel = models.find((m) => m.id === selectedModelId) ?? models[0]
+
+  /**
+   * Обработчик сабмита формы скоринга.
+   * Внутри формируем запись с фичами для соответствующей модели.
+   */
+  const handleScore = async () => {
+    setLoadingPredict(true)
+    setPredictError(null)
+    setPrediction(null)
+
+    try {
+      let record: Record<string, unknown>
+
+      // На будущее: можно развести разные форматы рекорда по modelId
+      if (selectedModelId === 'context_aware') {
+        record = {
+          // имена полей подогнаны под фичи snapshot-модели
+          total_events: Number(totalEvents),
+          total_purchases: Number(totalPurchases),
+          days_since_last_event: Number(daysSinceLast),
+          avg_spend_per_purchase_30d: Number(avgSpend30d),
+        }
+      } else {
+        // По умолчанию — пустой объект (можно заменить на универсальную JSON-форму)
+        record = {}
+      }
+
+      const pred = await callPredictApi(selectedModelId, record)
+      setPrediction(pred)
+    } catch (err) {
+      setPredictError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoadingPredict(false)
+    }
+  }
 
   return (
     <div className="app">
@@ -169,6 +315,9 @@ function App() {
           </button>
           <button className={`tab ${activeTab === 'reco' ? 'active' : ''}`} onClick={() => setActiveTab('reco')}>
             Рекомендации
+          </button>
+          <button className={`tab ${activeTab === 'models' ? 'active' : ''}`} onClick={() => setActiveTab('models')}>
+            Модели
           </button>
         </nav>
       </header>
@@ -264,13 +413,141 @@ function App() {
                 <li key={idx} className={`reco-item ${r.impact}`}>
                   <div className="reco-title">
                     {r.title}
-                    <span className="impact">{r.impact === 'high' ? 'высокий' : r.impact === 'medium' ? 'средний' : 'низкий'} эффект</span>
+                    <span className="impact">
+                      {r.impact === 'high' ? 'высокий' : r.impact === 'medium' ? 'средний' : 'низкий'} эффект
+                    </span>
                   </div>
                   <div className="reco-desc">{r.description}</div>
                 </li>
               ))}
             </ul>
             <div className="footnote">Данные и прогнозы — мок для демонстрации интерфейса.</div>
+          </section>
+        </main>
+      )}
+
+      {activeTab === 'models' && (
+        <main className="content">
+          <section className="card">
+            <div className="row">
+              <h3 className="mr">Онлайн-скоринг моделей</h3>
+              <select value={selectedModelId} onChange={(e) => setSelectedModelId(e.target.value)}>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p style={{ marginTop: 8, opacity: 0.8 }}>{selectedModel?.description}</p>
+
+            {/* Форма ввода фич для выбранной модели.
+                Пока реализован специализированный блок под context_aware. */}
+            {selectedModelId === 'context_aware' && (
+              <>
+                <div className="row" style={{ marginTop: 12, gap: 16, flexWrap: 'wrap' }}>
+                  <label>
+                    Событий всего
+                    <input
+                      type="number"
+                      value={totalEvents}
+                      onChange={(e) => setTotalEvents(e.target.value)}
+                      style={{ display: 'block', width: 120, marginTop: 4 }}
+                    />
+                  </label>
+                  <label>
+                    Покупок всего
+                    <input
+                      type="number"
+                      value={totalPurchases}
+                      onChange={(e) => setTotalPurchases(e.target.value)}
+                      style={{ display: 'block', width: 120, marginTop: 4 }}
+                    />
+                  </label>
+                  <label>
+                    Дней с последнего события
+                    <input
+                      type="number"
+                      value={daysSinceLast}
+                      onChange={(e) => setDaysSinceLast(e.target.value)}
+                      style={{ display: 'block', width: 160, marginTop: 4 }}
+                    />
+                  </label>
+                  <label>
+                    Средний чек за 30 дн, ₽
+                    <input
+                      type="number"
+                      value={avgSpend30d}
+                      onChange={(e) => setAvgSpend30d(e.target.value)}
+                      style={{ display: 'block', width: 160, marginTop: 4 }}
+                    />
+                  </label>
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: 16 }}>
+              <button disabled={loadingPredict} onClick={handleScore}>
+                {loadingPredict ? 'Считаем…' : 'Посчитать предсказание'}
+              </button>
+            </div>
+
+            {predictError && (
+              <div style={{ marginTop: 12, color: '#ef4444' }}>
+                <strong>Ошибка:</strong> {predictError}
+              </div>
+            )}
+
+            {prediction && (
+              <div style={{ marginTop: 16 }}>
+                <h4>Результат предсказания</h4>
+                {/* Если это context_aware, красиво выводим основные поля.
+                    Для других моделей просто покажем JSON. */}
+                {selectedModelId === 'context_aware' ? (
+                  <ul className="bulleted">
+                    <li>
+                      Вероятность покупки в 7 дней:{' '}
+                      <strong>
+                        {typeof prediction.purchase_proba === 'number'
+                          ? (prediction.purchase_proba * 100).toFixed(1)
+                          : '-'}
+                        %
+                      </strong>
+                    </li>
+                    <li>
+                      Флаг покупки:{' '}
+                      <strong>
+                        {typeof prediction.will_purchase_pred === 'number' || typeof prediction.will_purchase_pred === 'boolean'
+                          ? Number(prediction.will_purchase_pred) === 1
+                            ? 'Да'
+                            : 'Нет'
+                          : '-'}
+                      </strong>
+                    </li>
+                    <li>
+                      Дней до следующей покупки:{' '}
+                      <strong>
+                        {typeof prediction.days_to_next_pred === 'number'
+                          ? prediction.days_to_next_pred.toFixed(1)
+                          : '-'}
+                      </strong>
+                    </li>
+                    <li>
+                      Сумма следующей покупки:{' '}
+                      <strong>
+                        {typeof prediction.next_purchase_amount_pred === 'number'
+                          ? `${prediction.next_purchase_amount_pred.toFixed(2)} ₽`
+                          : '-'}
+                      </strong>
+                    </li>
+                  </ul>
+                ) : (
+                  <pre style={{ marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify(prediction, null, 2)}
+                  </pre>
+                )}
+              </div>
+            )}
           </section>
         </main>
       )}
