@@ -41,6 +41,12 @@ def main():
     for k, v in test_metrics.items():
         print(f"  {k}: {v:.4f}" if isinstance(v, (int, float)) else f"  {k}: {v}")
 
+    print("\n📈 Top 10 important features:")
+    fi = model.get_feature_importance(top_n=10)
+    if fi is not None:
+        for _, row in fi.iterrows():
+            print(f"  {row['feature']}: {row['importance']:.1f}")
+
     # Сохранение модели
     print(f"\n💾 Saving model to {MODEL_PATH}")
     os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)

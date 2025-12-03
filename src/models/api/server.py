@@ -1,172 +1,346 @@
-import json
+"""
+Models API Server (FastAPI)
+
+Сервер для инференса ML-моделей с автоматической документацией.
+Запуск: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+"""
+
 import os
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from contextlib import asynccontextmanager
+from enum import Enum
 from importlib import import_module
-from urllib.parse import urlparse, parse_qs
+from typing import Any
 
 import pandas as pd
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-
+# ===== Настройка путей =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Ensure project src is on sys.path for module imports like `models.*`
-SRC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))  # .../src
+SRC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-# Default path to production models (can be overridden by env vars)
 MODELS_DIR = os.path.join(SRC_DIR, "models", "production_models")
 DEFAULT_CONTEXT_AWARE_PATH = os.path.join(MODELS_DIR, "context_aware_model1.pkl")
 
 
+# ===== Pydantic-схемы =====
+class PredictRequest(BaseModel):
+    """Запрос на предсказание."""
+    records: list[dict[str, Any]] = Field(
+        ...,
+        description="Список записей с фичами для предсказания",
+        min_length=1,
+        examples=[[{
+            "total_events": 100,
+            "total_purchases": 3,
+            "days_since_last_event": 5,
+            "avg_spend_per_purchase_30d": 1200.0
+        }]]
+    )
+    service: str | None = Field(
+        default=None,
+        description="Имя сервиса/модели (опционально, по умолчанию context_aware)"
+    )
+
+
+class PredictResponse(BaseModel):
+    """Ответ с предсказаниями."""
+    predictions: list[dict[str, Any]] = Field(
+        ...,
+        description="Список предсказаний",
+        examples=[[{
+            "purchase_proba": 0.73,
+            "will_purchase_pred": 1,
+            "days_to_next_pred": 4.2,
+            "next_purchase_amount_pred": 1450.0
+        }]]
+    )
+
+
+class ServiceStatus(str, Enum):
+    LOADED = "loaded"
+    ERROR = "error"
+    PENDING = "pending"
+
+
+class ServiceInfo(BaseModel):
+    """Информация о сервисе."""
+    status: ServiceStatus
+    model_path: str | None = None
+    error: str | None = None
+
+
+class ServicesResponse(BaseModel):
+    """Список доступных сервисов."""
+    services: list[str]
+    details: dict[str, ServiceInfo]
+
+
+class HealthResponse(BaseModel):
+    """Ответ health check."""
+    status: str = "ok"
+
+
+class ErrorResponse(BaseModel):
+    """Ответ с ошибкой."""
+    error: str
+    details: str | None = None
+
+
+# ===== Сервис моделей =====
 class ModelService:
-    """Обёртка над моделью: динамическая загрузка класса и веса, предикт.
+    """Обёртка над моделью: динамическая загрузка класса и предикт."""
 
-    По умолчанию грузит ContextAwareModel, но класс можно переопределить через dotted path,
-    например: "models.models.context_aware:ContextAwareModel".
-    """
-
-    def __init__(self, model_path: str, model_class_path: str = "models.models.context_aware:ContextAwareModel") -> None:
+    def __init__(self, model_path: str, model_class_path: str) -> None:
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
-        module_name, class_name = model_class_path.split(":", 1)
-        module = import_module(module_name)
-        model_cls = getattr(module, class_name)
-        self.model = model_cls.load(model_path)
+        try:
+            module_name, class_name = model_class_path.split(":", 1)
+            module = import_module(module_name)
+            model_cls = getattr(module, class_name)
+            self.model = model_cls.load(model_path)
+        except (ImportError, OSError) as e:
+            raise RuntimeError(
+                f"Failed to load model '{model_class_path}': {e}"
+            ) from e
 
-    def predict_from_records(self, records: list[dict]) -> list[dict]:
-        """Принимает список словарей с фичами, возвращает список словарей с предсказаниями."""
+    def predict(self, records: list[dict]) -> list[dict]:
+        """Предсказание по списку записей."""
         if not records:
             return []
 
         df = pd.DataFrame.from_records(records)
         preds_df = self.model.predict(df)
 
-        # Сериализация: используем to_json -> json.loads, чтобы гарантировать JSON‑совместимые типы
-        records_json = preds_df.to_json(orient="records")
-        return json.loads(records_json)
+        # Конвертация в JSON-совместимый формат
+        return preds_df.to_dict(orient="records")
 
-# ===== Регистрация сервисов (можно расширять ассортимент моделей) =====
+
+# ===== Конфигурация сервисов =====
 SERVICE_CONFIGS: dict[str, dict] = {
     "context_aware": {
         "model_path": os.getenv("CONTEXT_AWARE_MODEL_PATH", DEFAULT_CONTEXT_AWARE_PATH),
         "model_class_path": os.getenv(
-            "CONTEXT_AWARE_CLASS_PATH", "models.models.context_aware:ContextAwareModel"
+            "CONTEXT_AWARE_CLASS_PATH",
+            "models.models.context_aware:ContextAwareModel"
         ),
-    }
+    },
+    # Легко добавить новые модели:
+    # "cross_region": {
+    #     "model_path": os.getenv("CROSS_REGION_MODEL_PATH", "..."),
+    #     "model_class_path": "models.models.cross_region:CrossRegionModel",
+    # },
 }
 
-# Lazy cache of instantiated services
+# Кэш сервисов и ошибок
 SERVICES: dict[str, ModelService] = {}
+SERVICE_ERRORS: dict[str, str] = {}
 
 
 def get_service(name: str) -> ModelService:
-    cfg = SERVICE_CONFIGS.get(name)
-    if cfg is None:
-        raise ValueError(f"Unknown service: {name}")
+    """Получает сервис по имени с lazy-загрузкой."""
+    if name not in SERVICE_CONFIGS:
+        raise HTTPException(status_code=404, detail=f"Unknown service: {name}")
+
+    if name in SERVICE_ERRORS:
+        raise HTTPException(status_code=503, detail=SERVICE_ERRORS[name])
+
     if name not in SERVICES:
-        SERVICES[name] = ModelService(
-            model_path=cfg["model_path"], model_class_path=cfg["model_class_path"]
-        )
+        cfg = SERVICE_CONFIGS[name]
+        try:
+            SERVICES[name] = ModelService(
+                model_path=cfg["model_path"],
+                model_class_path=cfg["model_class_path"]
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            SERVICE_ERRORS[name] = str(e)
+            raise HTTPException(status_code=503, detail=str(e))
+
     return SERVICES[name]
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    def _set_headers(self, status_code: int = 200, content_type: str = "application/json") -> None:
-        self.send_response(status_code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Access-Control-Allow-Origin", "*")  # для dev: разрешаем CORS
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
-    def do_OPTIONS(self) -> None:
-        """CORS preflight"""
-        self._set_headers(200)
-
-    def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path
-
-        if path == "/health":
-            self._set_headers(200)
-            self.wfile.write(json.dumps({"status": "ok"}).encode("utf-8"))
-            return
-
-        if path == "/services":
-            self._set_headers(200)
-            self.wfile.write(json.dumps({"services": list(SERVICE_CONFIGS.keys())}).encode("utf-8"))
-            return
-
-        # 404 по умолчанию
-        self._set_headers(404)
-        self.wfile.write(json.dumps({"error": "Not found"}).encode("utf-8"))
-
-    def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path
-
-        # Поддерживаем /predict, /predict/<service> и ?service=
-        if path == "/predict" or path.startswith("/predict/"):
-            service_in_path = None
-            parts = [p for p in path.split("/") if p]
-            if len(parts) == 2:  # ["predict"]
-                service_in_path = None
-            elif len(parts) == 3:  # ["predict", "<service>"]
-                service_in_path = parts[2]
-            self.handle_predict(service_in_path)
-            return
-
-        self._set_headers(404)
-        self.wfile.write(json.dumps({"error": "Not found"}).encode("utf-8"))
-
-    def handle_predict(self, service_in_path: str | None = None) -> None:
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length).decode("utf-8")
-            data = json.loads(body)
-        except Exception:
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": "invalid json"}).encode("utf-8"))
-            return
-
-        records = data.get("records")
-        if not isinstance(records, list):
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": "`records` must be a list"}).encode("utf-8"))
-            return
-
-        # Определяем сервис: приоритет path > body.service > query ?service=
-        parsed = urlparse(self.path)
-        query_service = parse_qs(parsed.query).get("service", [None])[0]
-        body_service = data.get("service") if isinstance(data, dict) else None
-        service_name = service_in_path or body_service or query_service or "context_aware"
-
-        try:
-            service = get_service(service_name)
-            predictions = service.predict_from_records(records)
-        except ValueError as exc:
-            # Например, неизвестный сервис
-            self._set_headers(400)
-            self.wfile.write(json.dumps({"error": str(exc)}).encode("utf-8"))
-            return
-        except Exception as exc:
-            self._set_headers(500)
-            self.wfile.write(json.dumps({"error": str(exc)}).encode("utf-8"))
-            return
-
-        self._set_headers(200)
-        self.wfile.write(json.dumps({"predictions": predictions}).encode("utf-8"))
+def get_services_status() -> dict[str, ServiceInfo]:
+    """Возвращает статус всех сервисов."""
+    status = {}
+    for name, cfg in SERVICE_CONFIGS.items():
+        if name in SERVICES:
+            status[name] = ServiceInfo(
+                status=ServiceStatus.LOADED,
+                model_path=cfg["model_path"]
+            )
+        elif name in SERVICE_ERRORS:
+            status[name] = ServiceInfo(
+                status=ServiceStatus.ERROR,
+                error=SERVICE_ERRORS[name]
+            )
+        else:
+            status[name] = ServiceInfo(
+                status=ServiceStatus.PENDING,
+                model_path=cfg["model_path"]
+            )
+    return status
 
 
-def run(host: str = "0.0.0.0", port: int = 8000) -> None:
-    server_address = (host, port)
-    httpd = HTTPServer(server_address, RequestHandler)
-    print(f"Serving Models API on http://{host}:{port}")
-    httpd.serve_forever()
+# ===== Lifespan (опциональная предзагрузка моделей) =====
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle: можно предзагружать модели при старте."""
+    # Опционально: предзагрузка моделей
+    # for name in SERVICE_CONFIGS:
+    #     try:
+    #         get_service(name)
+    #         print(f"✅ Preloaded service: {name}")
+    #     except HTTPException as e:
+    #         print(f"⚠️ Failed to preload {name}: {e.detail}")
+
+    print(f"🚀 Models API started. Available services: {list(SERVICE_CONFIGS.keys())}")
+    yield
+    print("👋 Shutting down...")
 
 
+# ===== FastAPI App =====
+app = FastAPI(
+    title="AnModel API",
+    description="API для инференса ML-моделей маркетинговой аналитики",
+    version="2.0.0",
+    lifespan=lifespan,
+    responses={
+        503: {"model": ErrorResponse, "description": "Service Unavailable"},
+    }
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В проде указать конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ===== Эндпоинты =====
+@app.get("/health", response_model=HealthResponse, tags=["System"])
+async def health_check():
+    """Проверка работоспособности сервера."""
+    return HealthResponse()
+
+
+@app.get("/services", response_model=ServicesResponse, tags=["System"])
+async def list_services():
+    """Список доступных сервисов и их статус."""
+    return ServicesResponse(
+        services=list(SERVICE_CONFIGS.keys()),
+        details=get_services_status()
+    )
+
+
+@app.get("/model-info/{service_name}", tags=["System"])
+async def get_model_info(service_name: str):
+    """
+    Получить информацию о модели: ожидаемые фичи, порог классификации и т.д.
+    """
+    model_service = get_service(service_name)
+    model = model_service.model
+
+    info = {
+        "service": service_name,
+        "features": [],
+        "optimal_threshold": None,
+        "feature_importance_top10": None,
+    }
+
+    # Получаем список фичей
+    if hasattr(model, "feature_columns_") and model.feature_columns_ is not None:
+        info["features"] = model.feature_columns_.tolist()
+
+    # Порог классификации
+    if hasattr(model, "optimal_threshold_"):
+        info["optimal_threshold"] = model.optimal_threshold_
+
+    # Топ-10 важных фичей
+    if hasattr(model, "feature_importance_") and model.feature_importance_ is not None:
+        top10 = model.feature_importance_.head(10).to_dict(orient="records")
+        info["feature_importance_top10"] = top10
+
+    # Медианы числовых фичей (для понимания "нормальных" значений)
+    if hasattr(model, "numeric_medians_"):
+        info["feature_medians"] = model.numeric_medians_
+
+    return info
+
+@app.post(
+    "/predict",
+    response_model=PredictResponse,
+    tags=["Prediction"],
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request"},
+        503: {"model": ErrorResponse, "description": "Model unavailable"},
+    }
+)
+async def predict(
+        request: PredictRequest,
+        service: str = Query(default="context_aware", description="Имя сервиса/модели")
+):
+    """
+    Получить предсказания модели.
+
+    Приоритет выбора сервиса:
+    1. Query parameter `?service=...`
+    2. Поле `service` в теле запроса
+    3. По умолчанию: `context_aware`
+    """
+    # Определяем сервис: query param > body > default
+    service_name = service or request.service or "context_aware"
+
+    model_service = get_service(service_name)
+
+    try:
+        predictions = model_service.predict(request.records)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return PredictResponse(predictions=predictions)
+
+
+@app.post(
+    "/predict/{service_name}",
+    response_model=PredictResponse,
+    tags=["Prediction"],
+    responses={
+        400: {"model": ErrorResponse, "description": "Bad Request"},
+        404: {"model": ErrorResponse, "description": "Service not found"},
+        503: {"model": ErrorResponse, "description": "Model unavailable"},
+    }
+)
+async def predict_by_service(service_name: str, request: PredictRequest):
+    """
+    Получить предсказания конкретной модели.
+
+    Путь `/predict/context_aware` эквивалентен `/predict?service=context_aware`
+    """
+    model_service = get_service(service_name)
+
+    try:
+        predictions = model_service.predict(request.records)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return PredictResponse(predictions=predictions)
+
+
+# ===== Запуск через uvicorn =====
 if __name__ == "__main__":
-    run()
+    import uvicorn
+
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True  # Для разработки
+    )

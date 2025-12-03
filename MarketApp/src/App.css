@@ -7,8 +7,7 @@ body {
 
 #root {
   max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
+  margin: 0;
   text-align: left;
 }
 
