@@ -118,16 +118,8 @@ class UserSearchResponse(BaseModel):
 
 
 class User(BaseModel):
-    user_id: str
-    name: Optional[str]
-    email: Optional[str]
+    user_uid: str
 
-    events_per_day: Optional[float]
-    total_events: Optional[int]
-    total_purchases: Optional[int]
-    distinct_items: Optional[int]
-    days_since_last: Optional[int]
-    avg_spend_per_purchase_30d: Optional[float]
 
 
 # ===== Сервис моделей =====
@@ -384,55 +376,52 @@ async def predict_by_service(service_name: str, request: PredictRequest):
     return PredictResponse(predictions=predictions)
 
 
-@app.get("/users/search", response_model=UserSearchResponse, tags=["Users"])
-async def search_users(
-        query: str = Query(..., description="Поисковый запрос (ID)"),
-        limit: int = Query(10, ge=1, le=100, description="Лимит результатов")
-):
-    """
-    Поиск пользователей в БД.
-    В реальном приложении здесь будет подключение к БД.
-    """
-    # Заглушка - в реальном приложении будет запрос к БД
+@app.get("/users/search", tags=["Users"])
+async def search_users(query: Optional[str] = Query(None)):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT user_uid
-            FROM users
-            WHERE cast(user_uid as text) ILIKE $1
-            ORDER BY user_uid
-            LIMIT $2
-            """,
-            f"%{query}%",
-            limit
-        )
-
-    users = []
-    for r in rows:
-        user_id = r["user_id"]
-        features = daily_snapshot.loc[user_id] if user_id in daily_snapshot.index else {}
-        users.append(
-            User(
-                user_id=user_id,
-                name=r["name"],
-                email=r["email"],
-                events_per_day=features.get("events_per_day"),
-                total_events=features.get("total_events"),
-                total_purchases=features.get("total_purchases"),
-                distinct_items=features.get("distinct_items"),
-                days_since_last=features.get("days_since_last"),
-                avg_spend_per_purchase_30d=features.get("total_spent") / max(1, features.get("total_purchases", 0))
+        if query and query.strip():
+            rows = await conn.fetch(
+                """
+                SELECT user_uid
+                FROM users
+                WHERE user_uid::text ILIKE $1
+                ORDER BY user_uid
+                """,
+                f"%{query}%"
             )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT user_uid
+                FROM users
+                ORDER BY user_uid
+                """,
+            )
+
+    results = []
+
+    for r in rows:
+        user_id = str(r["user_uid"])
+
+        features = (
+            daily_snapshot.loc[user_id].to_dict()
+            if user_id in daily_snapshot.index
+            else {}
         )
 
-    return UserSearchResponse(users=users)
+        results.append({
+            "user_id": user_id,
+            "features": features
+        })
+
+    return {"users": results}
+
 
 
 @app.get("/user/{user_id}/features", response_model=UserFeaturesResponse, tags=["Users"])
 async def get_user_features(
-        user_id: int,
-        days: int = Query(30, ge=1, le=365),
+        user_id: str,
         model: str = Query("context_aware")
 ):
     """
