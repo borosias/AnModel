@@ -14,8 +14,6 @@ import {usePredictionHistory} from "../hooks/usePredictionHistory";
 import {
     getPredictionData,
     getMetricKeys,
-    getPieChartData,
-    getRadarChartData
 } from "../utils/chartUtils";
 import type {HealthResponse, ServicesResponse, User, InputMode, Features} from "../types";
 
@@ -37,8 +35,6 @@ export default function Dashboard() {
     const [error, setError] = useState<string>("");
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [userId, setUserId] = useState<string>("");
-    const [searchQuery, setSearchQuery] = useState<string | undefined>(undefined);
-    const [isSearching, setIsSearching] = useState<boolean>(false);
     const [activeGraphTab, setActiveGraphTab] = useState<number>(0);
 
     const chartColors = [
@@ -57,8 +53,8 @@ export default function Dashboard() {
         refetchInterval: 30000,
     });
     const {data: usersData, isLoading: usersLoading} = useQuery<{ users: User[] }, Error>({
-        queryKey: ["users", searchQuery],
-        queryFn: () => apiClient.searchUsers(searchQuery),
+        queryKey: ["users"],
+        queryFn: () => apiClient.getUsers(),
     });
 
     const [users, setUsers] = useState<User[]>([]);
@@ -105,24 +101,6 @@ export default function Dashboard() {
                 initialData[feature] = 0;
             });
             setInputData(initialData);
-        }
-    };
-
-    const handleSearchUsers = async () => {
-        if (!searchQuery?.trim()) {
-            setUsers([]);
-            return;
-        }
-
-        setIsSearching(true);
-        try {
-            const data = await apiClient.searchUsers(searchQuery?.trim());
-            setUsers(data.users || []);
-        } catch (error) {
-            console.error("Помилка пошуку користувачів:", error);
-            setUsers([]);
-        } finally {
-            setIsSearching(false);
         }
     };
 
@@ -254,8 +232,6 @@ export default function Dashboard() {
 
     const predictionData = getPredictionData(history);
     const metricKeys = getMetricKeys(history);
-    const pieChartData = getPieChartData(history, chartColors);
-    const radarChartData = getRadarChartData(history);
     const hasData = history.length > 0;
 
     return (
@@ -274,10 +250,10 @@ export default function Dashboard() {
                 }}
             />
 
-            <Container maxWidth="xl" sx={{py: 3}}>
+            <Container  sx={{py: 3, width:"100%"}}>
                 <Grid container spacing={3}>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={4}>
+                    <Grid item xs={12} md={12} sx={{width:"100%"}}>
                         <Stack spacing={3}>
                             <ModelSelectionCard
                                 services={serviceOptions}
@@ -297,12 +273,9 @@ export default function Dashboard() {
                                     [field]: parseFloat(value) || 0,
                                 }))}
                                 onResetToDefault={handleResetToDefault}
-                                searchQuery={searchQuery || ""}
-                                setSearchQuery={setSearchQuery}
-                                onSearchUsers={handleSearchUsers}
                                 users={users}
-                                isSearching={isSearching}
-                                onLoadUserData={handleLoadUserData}
+                                usersLoading={usersLoading}
+                                onSelectUserData={handleLoadUserData}
                                 userId={userId}
                                 setUserId={setUserId}
                                 selectedService={selectedService}
@@ -320,7 +293,7 @@ export default function Dashboard() {
                         </Stack>
                     </Grid>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={8}>
+                    <Grid item xs={12} md={12} sx={{m:"0 auto"}}>
                         <Stack spacing={3}>
                             {hasData ? (
                                 <>
@@ -329,8 +302,6 @@ export default function Dashboard() {
                                         setActiveGraphTab={setActiveGraphTab}
                                         predictionData={predictionData}
                                         metricKeys={metricKeys}
-                                        pieChartData={pieChartData}
-                                        radarChartData={radarChartData}
                                         chartColors={chartColors}
                                     />
 
@@ -353,22 +324,24 @@ export default function Dashboard() {
             </Container>
 
             <Box sx={{
+                display: "flex",
                 py: 2,
                 px: 3,
                 bgcolor: alpha(theme.palette.primary.main, 0.05),
                 borderTop: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
                 mt: 3,
+                justifyContent: "center",
             }}>
-                <Container maxWidth="xl">
+                <Container maxWidth="lg" sx={{m: "0 auto"}}>
                     <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography variant="caption" color="text.contrastText">
                             © {new Date().getFullYear()} Marketing Predictions AI v2.0
                         </Typography>
                         <Stack direction="row" spacing={2}>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" color="text.contrastText">
                                 API: {import.meta.env.VITE_API_BASE || "http://localhost:8000"}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" color="text.contrastText">
                                 Моделей: {services?.services?.length || 0}
                             </Typography>
                         </Stack>

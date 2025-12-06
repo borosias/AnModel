@@ -121,7 +121,6 @@ class User(BaseModel):
     user_uid: str
 
 
-
 # ===== Сервис моделей =====
 class ModelService:
     """Обёртка над моделью: динамическая загрузка класса и предикт."""
@@ -341,7 +340,7 @@ async def predict(
 
 
 async def get_pool():
-    return await asyncpg.create_pool(
+    return asyncpg.create_pool(
         user="postgres",
         password="postgres",
         database="postgres",
@@ -376,34 +375,33 @@ async def predict_by_service(service_name: str, request: PredictRequest):
     return PredictResponse(predictions=predictions)
 
 
-@app.get("/users/search", tags=["Users"])
-async def search_users(query: Optional[str] = Query(None)):
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if query and query.strip():
-            rows = await conn.fetch(
-                """
-                SELECT user_uid
-                FROM users
-                WHERE user_uid::text ILIKE $1
-                ORDER BY user_uid
-                """,
-                f"%{query}%"
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT user_uid
-                FROM users
-                ORDER BY user_uid
-                """,
-            )
+@app.get("/users", tags=["Users"])
+async def search_users():
+    try:
+        df = pd.read_parquet("../../analytics/data/users/users.parquet")
+        df = df.sort_values("user_uid")
+        user_ids = df["user_uid"].astype(str).tolist()
+
+    except Exception:
+        try:
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT user_uid
+                    FROM users
+                    ORDER BY user_uid
+                    """,
+                )
+
+            user_ids = [str(r["user_uid"]) for r in rows]
+
+        except Exception:
+            raise HTTPException(status_code=500, detail="No parquet file and no DB connection")
 
     results = []
 
-    for r in rows:
-        user_id = str(r["user_uid"])
-
+    for user_id in user_ids:
         features = (
             daily_snapshot.loc[user_id].to_dict()
             if user_id in daily_snapshot.index
@@ -416,59 +414,6 @@ async def search_users(query: Optional[str] = Query(None)):
         })
 
     return {"users": results}
-
-
-
-@app.get("/user/{user_id}/features", response_model=UserFeaturesResponse, tags=["Users"])
-async def get_user_features(
-        user_id: str,
-        model: str = Query("context_aware")
-):
-    """
-    Получить фичи пользователя за указанный период.
-    В реальном приложении здесь будет расчет фичей из БД.
-    """
-    try:
-        # Получаем модель для получения списка требуемых фичей
-        model_service = get_service(model)
-        model_obj = model_service.model
-
-        # Получаем список фичей модели
-        required_features = []
-        if hasattr(model_obj, "feature_columns_") and model_obj.feature_columns_ is not None:
-            required_features = model_obj.feature_columns_.tolist()
-
-        # В реальном приложении здесь будет запрос к БД для расчета фичей
-        # Для демо используем случайные значения
-
-        import random
-        features = {}
-
-        for feature in required_features:
-            if feature == "total_events":
-                features[feature] = random.randint(0, 200)
-            elif feature == "total_purchases":
-                features[feature] = random.randint(0, 20)
-            elif feature == "days_since_last":
-                features[feature] = random.randint(0, 30)
-            elif feature == "avg_spend_per_purchase_30d":
-                features[feature] = round(random.uniform(100, 2000), 2)
-            else:
-                # Для остальных фичей генерируем случайные значения
-                features[feature] = round(random.uniform(0, 1000), 2)
-
-        return UserFeaturesResponse(
-            user_id=user_id,
-            features=features
-        )
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Помилка отримання даних користувача: {str(e)}"
-        )
 
 
 # ===== Запуск через uvicorn =====

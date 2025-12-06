@@ -1,5 +1,3 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
-
 export const TRANSLATIONS: Record<string, string> = {
   total_events: "Кількість подій",
   total_purchases: "Кількість покупок",
@@ -24,17 +22,25 @@ export const TRANSLATIONS: Record<string, string> = {
   features: "Характеристики",
 };
 
-export const GRAPH_TABS = [
-  { label: "Лінійний графік", icon: "TimelineIcon" },
-  { label: "Стовпчикова діаграма", icon: "EqualizerIcon" },
-  { label: "Обласний графік", icon: "AreaChart" },
-  { label: "Кругова діаграма", icon: "PieChart" },
-  { label: "Радарна діаграма", icon: "RadarChart" },
-] as const;
+export const formatFeatureValue = (key: string, value: number) => {
+    switch (key) {
+        case TRANSLATIONS.purchase_proba:
+        case "purchase_proba":
+            return `${(value * 100).toFixed(3)}%`;
 
-export const DEFAULT_VALUES: Record<string, number> = {
-  total_events: 100,
-  total_purchases: 3,
-  days_since_last_event: 5,
-  avg_spend_per_purchase_30d: 1200,
+        case TRANSLATIONS.days_to_next_pred:
+        case "days_to_next_pred":
+            return `${(value).toFixed(1)}`;
+
+        case TRANSLATIONS.next_purchase_amount_pred:
+        case "next_purchase_amount_pred":
+            return `${(value).toFixed(2)}₴`;
+
+        case TRANSLATIONS.will_purchase_pred:
+        case "will_purchase_pred":
+            return value === 1 ? "Буде" : "Не Буде";
+
+        default:
+            return value;
+    }
 };

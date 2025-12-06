@@ -21,9 +21,9 @@ export const apiClient = {
     return response.json();
   },
 
-  searchUsers: async (query: string | undefined,): Promise<{ users: User[] }> => {
+  getUsers: async (): Promise<{ users: User[] }> => {
     const response = await fetch(
-      `${API_BASE}/users/search${query ?"?query=${encodeURIComponent(query.trim())}" : ""}`
+      `${API_BASE}/users`
     );
     if (!response.ok) throw new Error("Не вдалося завантажити користувачів");
     return response.json();

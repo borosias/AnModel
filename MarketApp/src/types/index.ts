@@ -14,22 +14,7 @@ export interface HealthResponse {
     timestamp?: string;
 }
 
-export interface Features {
-    days_since_first?: number
-    days_since_last?: number
-    distinct_items?: number
-    events_per_day?: number
-    last_event_type?: string
-    last_item?: string
-    last_region?: string
-    snapshot_date?: string
-    total_clicks?: number
-    total_events?: number
-    total_purchases?: number
-    total_spent?: number
-    trend_popularity_max?: number
-    trend_popularity_mean?: number
-}
+export type Features = Record<string, any>;
 
 export interface User {
     user_id: string;

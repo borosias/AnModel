@@ -1,5 +1,4 @@
 import {type HistoryItem} from '../types';
-import {TRANSLATIONS} from '../constants';
 
 export const getPredictionData = (history: HistoryItem[]) => {
     return history.map((item, index) => {
@@ -35,34 +34,4 @@ export const getMetricKeys = (history: HistoryItem[]) => {
     });
 
     return Array.from(keys);
-};
-
-export const getPieChartData = (history: HistoryItem[], chartColors: string[]) => {
-    if (history.length === 0) return [];
-
-    const lastPrediction = history[0]?.output[0] || {};
-    return Object.entries(lastPrediction)
-        .filter(([_, value]) => typeof value === 'number' && value > 0)
-        .slice(0, 6)
-        .map(([key, value], index) => ({
-            name: TRANSLATIONS[key] || key.replace(/_/g, " "),
-            value: value as number,
-            fill: chartColors[index % chartColors.length],
-        }));
-};
-
-export const getRadarChartData = (history: HistoryItem[]) => {
-    if (history.length === 0) return [];
-
-    const lastPrediction = history[0]?.output[0] || {};
-    return Object.entries(lastPrediction)
-        .filter(([_, value]) => typeof value === 'number')
-        .slice(0, 8)
-        .map(([key, value]) => ({
-            subject: TRANSLATIONS[key]?.length > 15
-                ? TRANSLATIONS[key].substring(0, 15) + "..."
-                : TRANSLATIONS[key] || key,
-            value: value as number,
-            fullMark: Math.max(value as number * 1.5, 1),
-        }));
 };

@@ -45,6 +45,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         height: 'calc(100vh - 200px)',
         display: 'flex',
         alignItems: 'center',
+        color: theme.palette.primary.contrastText,
         justifyContent: 'center',
       }}
     >
@@ -56,10 +57,10 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             mb: 2,
           }}
         />
-        <Typography variant="h5" color="text.secondary" gutterBottom sx={{ fontWeight: 600 }}>
+        <Typography variant="h5" color="text.contrastText" gutterBottom sx={{ fontWeight: 600 }}>
           Дані для аналізу відсутні
         </Typography>
-        <Typography variant="body1" color="text.secondary" paragraph>
+        <Typography variant="body1" color="text.contrastText" paragraph>
           Оберіть модель, введіть дані та запустіть перший аналіз
         </Typography>
         <Button

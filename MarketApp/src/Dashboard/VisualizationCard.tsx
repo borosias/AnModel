@@ -14,8 +14,6 @@ import {
 import TimelineIcon from '@mui/icons-material/Timeline';
 import EqualizerIcon from '@mui/icons-material/Equalizer';
 import AreaChartIcon from '@mui/icons-material/AreaChart';
-import PieChartIcon from '@mui/icons-material/PieChart';
-import RadarIcon from '@mui/icons-material/Radar';
 import {
   LineChart,
   Line,
@@ -29,16 +27,8 @@ import {
   Tooltip as RechartsTooltip,
   ResponsiveContainer,
   Legend,
-  Cell,
-  PieChart as RechartsPieChart,
-  Pie,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Radar,
 } from 'recharts';
-import { TRANSLATIONS } from '../constants';
+import {formatFeatureValue, TRANSLATIONS} from '../constants';
 
 interface GraphTab {
   label: string;
@@ -50,8 +40,6 @@ interface VisualizationCardProps {
   setActiveGraphTab: (tab: number) => void;
   predictionData: any[];
   metricKeys: string[];
-  pieChartData: any[];
-  radarChartData: any[];
   chartColors: string[];
 }
 
@@ -60,8 +48,6 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
   setActiveGraphTab,
   predictionData,
   metricKeys,
-  pieChartData,
-  radarChartData,
   chartColors,
 }) => {
   const theme = useTheme();
@@ -70,8 +56,6 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
     { label: "Лінійний графік", icon: <TimelineIcon /> },
     { label: "Стовпчикова діаграма", icon: <EqualizerIcon /> },
     { label: "Обласний графік", icon: <AreaChartIcon /> },
-    { label: "Кругова діаграма", icon: <PieChartIcon /> },
-    { label: "Радарна діаграма", icon: <RadarIcon /> },
   ];
 
   const renderChart = () => {
@@ -93,7 +77,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 boxShadow: theme.shadows[3],
               }}
               formatter={(value: number, name: string) => [
-                typeof value === 'number' ? value.toFixed(3) : value,
+                formatFeatureValue(name,value),
                 TRANSLATIONS[name] || name,
               ]}
             />
@@ -126,7 +110,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 boxShadow: theme.shadows[3],
               }}
               formatter={(value: number, name: string) => [
-                typeof value === 'number' ? value.toFixed(3) : value,
+                formatFeatureValue(name,value),
                 TRANSLATIONS[name] || name,
               ]}
             />
@@ -164,7 +148,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 boxShadow: theme.shadows[3],
               }}
               formatter={(value: number, name: string) => [
-                typeof value === 'number' ? value.toFixed(3) : value,
+                formatFeatureValue(name,value),
                 TRANSLATIONS[name] || name,
               ]}
             />
@@ -181,70 +165,6 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
               />
             ))}
           </AreaChart>
-        );
-
-      case 3:
-        return pieChartData.length > 0 ? (
-          <RechartsPieChart>
-            <Pie
-              data={pieChartData}
-              cx="50%"
-              cy="50%"
-              labelLine={true}
-              label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(1)}%`}
-              outerRadius={120}
-              fill="#8884d8"
-              dataKey="value"
-            >
-              {pieChartData.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.fill || chartColors[index % chartColors.length]} />
-              ))}
-            </Pie>
-            <RechartsTooltip
-              formatter={(value: number, name: string) => [
-                typeof value === 'number' ? value.toFixed(3) : value,
-                name,
-              ]}
-              contentStyle={{
-                borderRadius: 8,
-                border: 'none',
-                boxShadow: theme.shadows[3],
-              }}
-            />
-            <Legend />
-          </RechartsPieChart>
-        ) : (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <Typography color="text.secondary">Немає даних для кругової діаграми</Typography>
-          </Box>
-        );
-
-      case 4:
-        return radarChartData.length > 0 ? (
-          <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarChartData}>
-            <PolarGrid />
-            <PolarAngleAxis dataKey="subject" />
-            <PolarRadiusAxis />
-            <Radar
-              name="Останній прогноз"
-              dataKey="value"
-              stroke={theme.palette.primary.main}
-              fill={theme.palette.primary.main}
-              fillOpacity={0.6}
-            />
-            <RechartsTooltip
-              contentStyle={{
-                borderRadius: 8,
-                border: 'none',
-                boxShadow: theme.shadows[3],
-              }}
-            />
-            <Legend />
-          </RadarChart>
-        ) : (
-          <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <Typography color="text.secondary">Немає даних для радарної діаграми</Typography>
-          </Box>
         );
 
       default:
