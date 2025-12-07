@@ -81,6 +81,18 @@ export default function Dashboard() {
         }
     }, [selectedService]);
 
+    const normalizePredictions = (result: any) => {
+        if (!result || !Array.isArray(result.predictions)) return result;
+        return {
+            ...result,
+            predictions: result.predictions.map((p: any) => ({
+                ...p,
+                days_to_next_pred:
+                    p.days_to_next_pred === 999 ? 0 : p.days_to_next_pred,
+            })),
+        };
+    };
+
     const fetchModelInfo = async (serviceName: string) => {
         try {
             const modelInfo = await apiClient.modelInfo(serviceName);
@@ -153,7 +165,8 @@ export default function Dashboard() {
                 return;
             }
 
-            const result = await apiClient.predict(selectedService, [modelInput]);
+            const rawResult = await apiClient.predict(selectedService, [inputData]);
+            const result = normalizePredictions(rawResult);
 
             addToHistory({
                 id: Date.now().toString(),
@@ -182,9 +195,23 @@ export default function Dashboard() {
             return;
         }
 
-        const invalidFields = modelFeatures.filter(feature =>
-            inputData[feature] === undefined || isNaN(Number(inputData[feature]))
-        );
+        // Корректная валидация: строковые last_* поля не считаем числами
+        const invalidFields = modelFeatures.filter(feature => {
+            const value = inputData[feature];
+
+            if (
+                feature === "last_event_type" ||
+                feature === "last_item" ||
+                feature === "last_region" ||
+                feature === "snapshot_date"
+            ) {
+                // Для строковых полей достаточно, чтобы значение вообще было (может быть пустой строкой)
+                return value === null || value === undefined;
+            }
+
+            // Для числовых полей проверяем, что можно привести к числу
+            return value === undefined || isNaN(Number(value));
+        });
 
         if (invalidFields.length > 0) {
             setError(`Будь ласка, введіть коректні значення для полів: ${invalidFields.join(", ")}`);
@@ -193,7 +220,8 @@ export default function Dashboard() {
         }
 
         try {
-            const result = await apiClient.predict(selectedService, [inputData]);
+            const rawResult = await apiClient.predict(selectedService, [inputData]);
+            const result = normalizePredictions(rawResult);
 
             addToHistory({
                 id: Date.now().toString(),
@@ -250,10 +278,10 @@ export default function Dashboard() {
                 }}
             />
 
-            <Container  sx={{py: 3, width:"100%"}}>
+            <Container sx={{py: 3, width: "100%"}}>
                 <Grid container spacing={3}>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={12} sx={{width:"100%"}}>
+                    <Grid item xs={12} md={12} sx={{width: "100%"}}>
                         <Stack spacing={3}>
                             <ModelSelectionCard
                                 services={serviceOptions}
@@ -268,10 +296,15 @@ export default function Dashboard() {
                                 setInputMode={setInputMode}
                                 modelFeatures={modelFeatures}
                                 inputData={inputData}
-                                onInputChange={(field: any, value: string) => setInputData(prev => ({
-                                    ...prev,
-                                    [field]: parseFloat(value) || 0,
-                                }))}
+                                onInputChange={(field: any, value: string) =>
+                                    setInputData(prev => {
+                                        const isLast = String(field).toLowerCase().startsWith('last');
+                                        return {
+                                            ...prev,
+                                            [field]: isLast ? (value || '') : (parseFloat(value) || 0),
+                                        };
+                                    })
+                                }
                                 onResetToDefault={handleResetToDefault}
                                 users={users}
                                 usersLoading={usersLoading}
@@ -293,7 +326,7 @@ export default function Dashboard() {
                         </Stack>
                     </Grid>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={12} sx={{m:"0 auto"}}>
+                    <Grid item xs={12} md={12} sx={{m: "0 auto"}}>
                         <Stack spacing={3}>
                             {hasData ? (
                                 <>

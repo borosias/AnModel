@@ -29,42 +29,62 @@ export const ManualInput: React.FC<ManualInputProps> = ({
 
   return (
     <Stack spacing={2}>
-      {modelFeatures.map((feature, index) => (
-        <TextField
-          key={feature}
-          fullWidth
-          label={TRANSLATIONS[feature] || feature}
-          type="number"
-          value={inputData[feature] || 0}
-          onChange={(e) => onInputChange(feature, e.target.value)}
-          size="medium"
-          sx={{
-            '& .MuiOutlinedInput-root': { borderRadius: 2 }
-          }}
-          InputProps={{
-            inputProps: {
-              step: "any",
-              min: 0,
-              style: { textAlign: 'right' }
-            },
-            startAdornment: (
-              <InputAdornment position="start">
-                <Badge
-                  badgeContent={index + 1}
-                  color="primary"
-                  sx={{
-                    '& .MuiBadge-badge': {
-                      fontSize: '0.7rem',
-                      height: 20,
-                      minWidth: 20,
-                    }
-                  }}
-                />
-              </InputAdornment>
-            ),
-          }}
-        />
-      ))}
+      {modelFeatures.map((feature, index) => {
+        const isLast = feature.toLowerCase().startsWith('last');
+        const value = isLast ? (inputData[feature] ?? '') : (inputData[feature] ?? 0);
+
+        const adornment = (
+          <InputAdornment position="start">
+            <Badge
+              badgeContent={index + 1}
+              color="primary"
+              sx={{
+                '& .MuiBadge-badge': {
+                  fontSize: '0.7rem',
+                  height: 20,
+                  minWidth: 20,
+                }
+              }}
+            />
+          </InputAdornment>
+        );
+
+        return (
+          <TextField
+            key={feature}
+            fullWidth
+            label={TRANSLATIONS[feature] || feature}
+            type={isLast ? 'text' : 'number'}
+            required={isLast}
+            value={value}
+            onChange={(e) => onInputChange(feature, e.target.value)}
+            size="medium"
+            sx={{
+              '& .MuiOutlinedInput-root': { borderRadius: 2 }
+            }}
+            InputProps={
+              isLast
+                ? {
+                    inputProps: {
+                      maxLength: 100,
+                      pattern: ".*\\S.*",
+                      style: { textAlign: 'right' },
+                    },
+                    startAdornment: adornment,
+                  }
+                : {
+                    inputProps: {
+                      step: 'any',
+                      min: 0,
+                      style: { textAlign: 'right' },
+                    },
+                    startAdornment: adornment,
+                  }
+            }
+            helperText={isLast ? 'Текстове поле (обов\'язково)' : undefined}
+          />
+        );
+      })}
     </Stack>
   );
 };

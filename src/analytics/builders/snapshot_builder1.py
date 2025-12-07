@@ -104,20 +104,6 @@ def load_events(events_dir):
     return df
 
 def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
-    """
-    Загрузка агрегированных трендов из trends_master.parquet (если он есть).
-
-    Ожидаемый формат parquet:
-      - date: дата (date/datetime)
-      - query: строка (название запроса)
-      - region: код региона (опционально для снапшотов)
-      - popularity: числовой индекс популярности
-
-    На выходе:
-      DataFrame с индексом по date и колонками:
-        - trend_popularity_mean
-        - trend_popularity_max
-    """
     logger = _get_logger()
 
     if not os.path.exists(trends_path):
@@ -138,9 +124,11 @@ def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
         logger.warning("В trends_master.parquet нет колонок 'date' и 'popularity' — тренды игнорируются")
         return pd.DataFrame()
 
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+    # 1. Приводим типы
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
 
+    # 2. Агрегируем по тем датам, которые есть (недельные точки)
     daily = (
         df.dropna(subset=["popularity"])
         .groupby("date")["popularity"]
@@ -150,6 +138,17 @@ def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
         )
         .sort_index()
     )
+
+    if daily.empty:
+        logger.info("Тренды после агрегации пустые — продолжаем без тренд‑фич")
+        return pd.DataFrame()
+
+    # 3. Разворачиваем до сплошного дневного ряда и тянем значения вперёд
+    full_index = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
+    daily = daily.reindex(full_index).ffill()
+
+    # Индекс делаем типом date, чтобы совпадал со snapshot_date
+    daily.index = daily.index.date
 
     logger.info(
         f"Загружены тренды: {len(daily)} дней "

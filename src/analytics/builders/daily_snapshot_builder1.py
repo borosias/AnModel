@@ -61,17 +61,58 @@ def load_events(events_dir):
 
 def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
     logger = _get_logger()
+
+    # 0. Проверка файла
     if not os.path.exists(trends_path):
         logger.info(f"Файл трендов не найден: {trends_path} — продолжаем без тренд‑фич")
-        return pd.DataFrame()
-    df = pd.read_parquet(trends_path)
-    if df.empty or "date" not in df.columns or "popularity" not in df.columns:
+        return {}
+
+    try:
+        df = pd.read_parquet(trends_path)
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать тренды из {trends_path}: {e}")
+        return {}
+
+    if df.empty:
+        logger.info("Файл трендов пустой — пропускаем")
+        return {}
+
+    if "date" not in df.columns or "popularity" not in df.columns:
         logger.info("Тренды отсутствуют или некорректны — пропускаем")
-        return pd.DataFrame()
-    df["date"] = pd.to_datetime(df["date"]).dt.date
+        return {}
+
+    # 1. Приводим типы
+    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
-    daily = df.groupby("date")["popularity"].agg(trend_popularity_mean="mean", trend_popularity_max="max")
-    logger.info(f"Загружены тренды для {len(daily)} дней ({daily.index.min()} - {daily.index.max()})")
+
+    # 2. Агрегируем по тем датам, которые есть (как отдаёт Google Trends)
+    daily = (
+        df.dropna(subset=["popularity"])
+        .groupby("date")["popularity"]
+        .agg(
+            trend_popularity_mean="mean",
+            trend_popularity_max="max",
+        )
+        .sort_index()
+    )
+
+    if daily.empty:
+        logger.info("Тренды после агрегации пустые — продолжаем без тренд‑фич")
+        return {}
+
+    # 3. Разворачиваем в сплошной дневной ряд и тянем значения вперёд
+    full_index = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
+    daily = daily.reindex(full_index).ffill()
+
+    # Индекс делаем типом date, чтобы совпадал с snapshot_date / date
+    daily.index = daily.index.date
+
+    logger.info(
+        f"Загружены тренды для {len(daily)} дней "
+        f"({daily.index.min()} - {daily.index.max()})"
+    )
+
+    # daily_snapshot_builder1, судя по коду, ожидает dict[date] -> {feature_name: value}
     return daily.to_dict(orient="index")
 
 def build_daily_snapshot(df, trends_dict=None):

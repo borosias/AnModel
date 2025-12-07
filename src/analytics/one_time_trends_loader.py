@@ -12,9 +12,109 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _parse_results(results: dict, queries: list, region: str) -> list:
+    """Парсим результаты из SerpAPI с правильным форматом дат"""
+    trends = []
+
+    def _parse_date(date_str_raw: str):
+        """
+        Поддержка форматов:
+          - 'Jun 4, 2025'
+          - 'Dec 1–7, 2024'
+          - 'Dec 29, 2024–Jan 4, 2025'
+        Берём первую дату интервала.
+        """
+        if not date_str_raw:
+            return None
+
+        # Нормализуем странные юникод‑символы (узкий пробел, длинное тире и т.п.)
+        s = (
+            date_str_raw
+            .replace('\u2009', ' ')  # narrow no‑break space
+            .replace('\u2011', '-')  # non‑breaking hyphen
+            .replace('\u2012', '-')  # figure dash
+            .replace('\u2013', '-')  # en dash
+            .replace('\u2014', '-')  # em dash
+            .strip()
+        )
+
+        # 1) Пытаемся как обычную дату 'Jun 4, 2025'
+        try:
+            return datetime.strptime(s, '%b %d, %Y').date()
+        except ValueError:
+            pass
+
+        # 2) Популярный формат 'Dec 1-7, 2024'
+        #    Берём первую часть до дефиса, плюс год справа.
+        try:
+            # s может быть 'Dec 1-7, 2024' или 'Dec 29, 2024-Jan 4, 2025'
+            # Берём год из конца строки (последние 4 цифры)
+            year = s[-4:]
+            if not year.isdigit():
+                raise ValueError
+
+            # Часть до запятой
+            if ',' in s:
+                left_part = s.split(',', 1)[0]  # 'Dec 1-7' или 'Dec 29, 2024-Jan 4'
+            else:
+                left_part = s
+
+            # Если есть дефис, берём всё слева от него ('Dec 1')
+            if '-' in left_part:
+                left_part = left_part.split('-', 1)[0].strip()
+
+            candidate = f"{left_part}, {year}"  # 'Dec 1, 2024'
+            return datetime.strptime(candidate, '%b %d, %Y').date()
+        except Exception:
+            logger.warning(f"⚠️ Cannot parse date: {date_str_raw}")
+            return None
+
+    try:
+        timeline_data = results.get("interest_over_time", {}).get("timeline_data", [])
+
+        print(f"📅 Found {len(timeline_data)} timeline entries")
+
+        for day_data in timeline_data:
+            date_str = day_data.get("date")
+            if not date_str:
+                continue
+
+            date = _parse_date(date_str)
+            if date is None:
+                continue
+
+            # Для каждого запроса в батче
+            values = day_data.get("values", [])
+            print(f"📈 Date: {date}, Values count: {len(values)}")
+
+            for i, query in enumerate(queries):
+                if i < len(values):
+                    popularity = values[i].get("value", 0)
+                    formatted_value = values[i].get("formattedValue", "0")
+                else:
+                    popularity = 0
+                    formatted_value = "0"
+
+                trends.append({
+                    'query': query,
+                    'region': region,
+                    'date': date,
+                    'popularity': int(popularity) if popularity else 0,
+                    'formatted_value': formatted_value,
+                    'loaded_at': datetime.now()
+                })
+
+    except Exception as e:
+        logger.error(f"❌ Parse error for {queries} in {region}: {e}")
+        import traceback
+        traceback.print_exc()
+
+    return trends
+
+
 class OneTimeTrendsLoader:
     def __init__(self, storage_path: str = "./trends_data"):
-        self.api_key = os.getenv("SERPAPI_KEY","e0905b78baa8db75444b707477b51b353782a44bd35d7fde188817b55fb89d45")
+        self.api_key = os.getenv("SERPAPI_KEY", "e0905b78baa8db75444b707477b51b353782a44bd35d7fde188817b55fb89d45")
         if not self.api_key:
             raise ValueError("SERPAPI_KEY not found!")
 
@@ -63,7 +163,7 @@ class OneTimeTrendsLoader:
 
                     print(f"📊 Raw API response keys: {results.keys()}")
 
-                    trends_data = self._parse_results(results, batch_queries, region)
+                    trends_data = _parse_results(results, batch_queries, region)
                     all_trends.extend(trends_data)
 
                     logger.info(f"✅ Got {len(trends_data)} records for this batch")
@@ -99,55 +199,6 @@ class OneTimeTrendsLoader:
         else:
             logger.error("❌ No data loaded!")
             return pd.DataFrame()
-
-    def _parse_results(self, results: dict, queries: list, region: str) -> list:
-        """Парсим результаты из SerpAPI с правильным форматом дат"""
-        trends = []
-
-        try:
-            timeline_data = results.get("interest_over_time", {}).get("timeline_data", [])
-
-            print(f"📅 Found {len(timeline_data)} timeline entries")
-
-            for day_data in timeline_data:
-                date_str = day_data.get("date")
-                if not date_str:
-                    continue
-
-                # Парсим дату в формате "Jun 4, 2025"
-                try:
-                    date = datetime.strptime(date_str, '%b %d, %Y').date()
-                except ValueError:
-                    logger.warning(f"⚠️ Cannot parse date: {date_str}")
-                    continue
-
-                # Для каждого запроса в батче
-                values = day_data.get("values", [])
-                print(f"📈 Date: {date}, Values count: {len(values)}")
-
-                for i, query in enumerate(queries):
-                    if i < len(values):
-                        popularity = values[i].get("value", 0)
-                        formatted_value = values[i].get("formattedValue", "0")
-                    else:
-                        popularity = 0
-                        formatted_value = "0"
-
-                    trends.append({
-                        'query': query,
-                        'region': region,
-                        'date': date,
-                        'popularity': int(popularity) if popularity else 0,
-                        'formatted_value': formatted_value,
-                        'loaded_at': datetime.now()
-                    })
-
-        except Exception as e:
-            logger.error(f"❌ Parse error for {queries} in {region}: {e}")
-            import traceback
-            traceback.print_exc()
-
-        return trends
 
     def _add_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Добавляем ML фичи"""
@@ -197,7 +248,7 @@ if __name__ == "__main__":
 
     # Затем основную загрузку:
     loader = OneTimeTrendsLoader()
-    df = loader.load_all_trends_once(days_back=180)
+    df = loader.load_all_trends_once(days_back=365)
 
     if not df.empty:
         print(f"✅ Successfully loaded {len(df)} trend records")
