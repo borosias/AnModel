@@ -1,26 +1,22 @@
 """
-Улучшенная версия ContextAwareModel v2.0
+ContextAwareModel v3.1 (Stable Demo Version)
 
-Ключевые улучшения:
-- LightGBM вместо sklearn GradientBoosting (быстрее, точнее)
-- Автоматический подбор гиперпараметров через Optuna
-- Умный препроцессинг с обработкой выбросов и правильным заполнением NaN
-- Калибровка вероятностей
-- Cross-validation для надежной оценки
-- Feature importance анализ
-- Оптимальный порог классификации
-- Исправленные метрики (RMSE вместо MSE)
+Changes:
+- Fixed AttributeError: get_feature_importance
+- Removed CalibratedClassifierCV
+- Removed masking (always predicts days/amount)
+- Enforced class_weight='balanced'
+- Added strict output clipping
 """
 
 import os
 import warnings
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     roc_auc_score,
     average_precision_score,
@@ -29,10 +25,10 @@ from sklearn.metrics import (
     precision_recall_curve,
     f1_score,
 )
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn.preprocessing import LabelEncoder
 
-# Пытаемся импортировать LightGBM, если нет — fallback на sklearn
+# Try importing LightGBM
 try:
     import lightgbm as lgb
 
@@ -41,7 +37,7 @@ except (ImportError, OSError):
     HAS_LIGHTGBM = False
     from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
-# Пытаемся импортировать Optuna для подбора гиперпараметров
+# Try importing Optuna
 try:
     import optuna
     from optuna.samplers import TPESampler
@@ -55,94 +51,49 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 
 class ContextAwareModel:
-    """
-    Модель для снапшотов из snapshot_builder1:
-    - will_purchase_next_7d (классификация)
-    - days_to_next_purchase (регрессия)
-    - next_purchase_amount (регрессия)
-
-    Улучшенная версия с:
-    - LightGBM (или fallback на sklearn)
-    - Автоматическим подбором гиперпараметров
-    - Калибровкой вероятностей
-    - Оптимизацией порога классификации
-    """
-
     def __init__(
             self,
             random_state: int = 42,
             use_optuna: bool = True,
-            optuna_trials: int = 50,
-            calibrate_proba: bool = True,
+            optuna_trials: int = 20,
             verbose: bool = True,
     ):
         self.random_state = random_state
         self.use_optuna = use_optuna and HAS_OPTUNA
         self.optuna_trials = optuna_trials
-        self.calibrate_proba = calibrate_proba
         self.verbose = verbose
 
-        # Модели
+        # Models
         self.clf = None
-        self.clf_calibrated = None
         self.reg_days = None
         self.reg_amount = None
 
-        # Препроцессинг
+        # Preprocessing
         self.feature_columns_: Optional[pd.Index] = None
         self.label_encoders_: Dict[str, LabelEncoder] = {}
         self.numeric_medians_: Dict[str, float] = {}
-        self.numeric_stds_: Dict[str, float] = {}
 
-        # Оптимальный порог классификации
+        # Threshold
         self.optimal_threshold_: float = 0.5
-
-        # Feature importance
         self.feature_importance_: Optional[pd.DataFrame] = None
-
-        # Лучшие гиперпараметры
         self.best_params_clf_: Optional[Dict] = None
-        self.best_params_reg_days_: Optional[Dict] = None
-        self.best_params_reg_amount_: Optional[Dict] = None
 
     def _log(self, msg: str):
         if self.verbose:
             print(msg)
 
-    # ========= ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =========
+    def _split_features_targets(self, df: pd.DataFrame):
+        target_cols = ["will_purchase_next_7d", "days_to_next_purchase", "next_purchase_amount"]
+        drop_cols = set(target_cols) | {"snapshot_date", "user_id", "last_ts", "index"}
 
-    def _split_features_targets(
-            self, df: pd.DataFrame
-    ) -> Tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series]:
-        """Разделяет DataFrame на фичи и таргеты."""
-        target_cols = [
-            "will_purchase_next_7d",
-            "days_to_next_purchase",
-            "next_purchase_amount",
-        ]
-
-        missing = [c for c in target_cols if c not in df.columns]
-        if missing:
-            raise ValueError(f"Missing target columns in data: {missing}")
+        X = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
         y_clf = df["will_purchase_next_7d"].astype(int)
         y_days = df["days_to_next_purchase"].astype(float)
         y_amount = df["next_purchase_amount"].astype(float)
-
-        # Исключаем таргеты и служебные колонки из фичей
-        drop_cols = set(target_cols) | {
-            "snapshot_date",
-            "user_id",
-            "last_ts",
-            "index",
-        }
-
-        X = df.drop(columns=[c for c in drop_cols if c in df.columns])
-
         return X, y_clf, y_days, y_amount
 
     def _detect_outliers_iqr(self, series: pd.Series, factor: float = 3.0) -> pd.Series:
-        """Обнаружение выбросов методом IQR."""
         Q1 = series.quantile(0.25)
         Q3 = series.quantile(0.75)
         IQR = Q3 - Q1
@@ -151,467 +102,197 @@ class ContextAwareModel:
         return series.clip(lower, upper)
 
     def _prepare_features_fit(self, X: pd.DataFrame) -> pd.DataFrame:
-        """
-        Препроцессинг фичей при обучении:
-        - Обработка выбросов в числовых колонках
-        - Заполнение NaN медианой для числовых, модой для категориальных
-        - Label encoding для категориальных (LightGBM умеет с ними работать)
-        """
         X = X.copy()
-
-        # Определяем типы колонок
         numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
         categorical_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
 
-        # Обработка числовых колонок
         for col in numeric_cols:
-            # Сохраняем медиану для заполнения NaN
             median_val = X[col].median()
             self.numeric_medians_[col] = median_val if pd.notna(median_val) else 0.0
-
-            # Сохраняем std для нормализации (опционально)
-            std_val = X[col].std()
-            self.numeric_stds_[col] = std_val if pd.notna(std_val) and std_val > 0 else 1.0
-
-            # Заполняем NaN медианой
             X[col] = X[col].fillna(self.numeric_medians_[col])
-
-            # Обрабатываем выбросы
             X[col] = self._detect_outliers_iqr(X[col])
 
-        # Обработка категориальных колонок
         for col in categorical_cols:
-            # Заполняем NaN специальной категорией
             X[col] = X[col].fillna("__MISSING__")
-
-            # Label encoding
             le = LabelEncoder()
             X[col] = le.fit_transform(X[col].astype(str))
             self.label_encoders_[col] = le
 
         self.feature_columns_ = X.columns
-
         return X
 
     def _prepare_features_infer(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Препроцессинг фичей при предсказании."""
         if self.feature_columns_ is None:
-            raise ValueError("Model is not fitted: feature_columns_ is None")
+            raise ValueError("Model is not fitted")
 
         X = X.copy()
-
-        # Убираем служебные колонки, если они есть
-        drop_cols = {"snapshot_date", "user_id", "last_ts", "index"}
+        drop_cols = {"snapshot_date", "user_id", "last_ts", "index",
+                     "will_purchase_next_7d", "days_to_next_purchase", "next_purchase_amount"}
         X = X.drop(columns=[c for c in drop_cols if c in X.columns])
 
-        # Числовые колонки
+        for col in self.feature_columns_:
+            if col not in X.columns:
+                X[col] = 0
+        X = X[self.feature_columns_]
+
         numeric_cols = [c for c in X.columns if c in self.numeric_medians_]
         for col in numeric_cols:
             X[col] = X[col].fillna(self.numeric_medians_.get(col, 0.0))
-            X[col] = self._detect_outliers_iqr(X[col])
 
-        # Категориальные колонки
         for col, le in self.label_encoders_.items():
             if col in X.columns:
                 X[col] = X[col].fillna("__MISSING__")
-                # Обрабатываем новые категории
                 X[col] = X[col].astype(str).apply(
                     lambda x: le.transform([x])[0] if x in le.classes_ else -1
                 )
 
-        # Приводим к нужному набору колонок
-        for col in self.feature_columns_:
-            if col not in X.columns:
-                X[col] = 0
-
-        X = X[self.feature_columns_]
-
         return X
 
-    # ========= ПОДБОР ГИПЕРПАРАМЕТРОВ =========
-
-    def _get_lgb_params(self, trial: "optuna.Trial", task: str = "classification") -> Dict:
-        """Генерирует параметры LightGBM для Optuna trial."""
-        params = {
-            "n_estimators": trial.suggest_int("n_estimators", 100, 500),
-            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.2, log=True),
-            "max_depth": trial.suggest_int("max_depth", 3, 10),
-            "num_leaves": trial.suggest_int("num_leaves", 20, 150),
-            "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
-            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
-            "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
-            "random_state": self.random_state,
-            "verbosity": -1,
-            "n_jobs": -1,
-        }
-
-        if task == "classification":
-            params["objective"] = "binary"
-            params["metric"] = "auc"
-        else:
-            params["objective"] = "regression"
-            params["metric"] = "rmse"
-
-        return params
-
-    def _optimize_classifier(self, X: np.ndarray, y: np.ndarray) -> Dict:
-        """Оптимизация гиперпараметров классификатора через Optuna."""
-
+    def _optimize_classifier(self, X, y) -> Dict:
         def objective(trial):
-            params = self._get_lgb_params(trial, "classification")
-
-            cv_scores = []
+            params = {
+                "n_estimators": trial.suggest_int("n_estimators", 100, 300),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+                "max_depth": trial.suggest_int("max_depth", 3, 7),
+                "num_leaves": trial.suggest_int("num_leaves", 20, 64),
+                "class_weight": "balanced",
+                "random_state": self.random_state,
+                "verbosity": -1,
+                "n_jobs": -1
+            }
             skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=self.random_state)
-
-            for train_idx, val_idx in skf.split(X, y):
-                X_train_cv, X_val_cv = X[train_idx], X[val_idx]
-                y_train_cv, y_val_cv = y[train_idx], y[val_idx]
-
-                model = lgb.LGBMClassifier(**params)
-                model.fit(
-                    X_train_cv, y_train_cv,
-                    eval_set=[(X_val_cv, y_val_cv)],
-                )
-
-                proba = model.predict_proba(X_val_cv)[:, 1]
-                score = roc_auc_score(y_val_cv, proba)
-                cv_scores.append(score)
-
-            return np.mean(cv_scores)
-
-        study = optuna.create_study(
-            direction="maximize",
-            sampler=TPESampler(seed=self.random_state)
-        )
-        study.optimize(objective, n_trials=self.optuna_trials, show_progress_bar=self.verbose)
-
-        return self._get_lgb_params(study.best_trial, "classification")
-
-    def _optimize_regressor(self, X: np.ndarray, y: np.ndarray, metric: str = "rmse") -> Dict:
-        """Оптимизация гиперпараметров регрессора через Optuna."""
-
-        def objective(trial):
-            params = self._get_lgb_params(trial, "regression")
-
             cv_scores = []
-            from sklearn.model_selection import KFold
-            kf = KFold(n_splits=3, shuffle=True, random_state=self.random_state)
-
-            for train_idx, val_idx in kf.split(X):
-                X_train_cv, X_val_cv = X[train_idx], X[val_idx]
-                y_train_cv, y_val_cv = y[train_idx], y[val_idx]
-
-                model = lgb.LGBMRegressor(**params)
-                model.fit(
-                    X_train_cv, y_train_cv,
-                    eval_set=[(X_val_cv, y_val_cv)],
-                )
-
-                preds = model.predict(X_val_cv)
-                score = np.sqrt(mean_squared_error(y_val_cv, preds))
+            for train_idx, val_idx in skf.split(X, y):
+                model = lgb.LGBMClassifier(**params)
+                model.fit(X[train_idx], y[train_idx], eval_set=[(X[val_idx], y[val_idx])])
+                score = roc_auc_score(y[val_idx], model.predict_proba(X[val_idx])[:, 1])
                 cv_scores.append(score)
-
             return np.mean(cv_scores)
 
-        study = optuna.create_study(
-            direction="minimize",
-            sampler=TPESampler(seed=self.random_state)
-        )
+        study = optuna.create_study(direction="maximize", sampler=TPESampler(seed=self.random_state))
         study.optimize(objective, n_trials=self.optuna_trials, show_progress_bar=self.verbose)
+        return study.best_params
 
-        return self._get_lgb_params(study.best_trial, "regression")
+    def fit(self, train_df: pd.DataFrame, val_df: Optional[pd.DataFrame] = None) -> Dict:
+        self._log("🚀 Training ContextAwareModel v3.2 (Smart Regressor)...")
 
-    def _find_optimal_threshold(self, y_true: np.ndarray, proba: np.ndarray) -> float:
-        """Находит оптимальный порог классификации по F1-score."""
-        precision, recall, thresholds = precision_recall_curve(y_true, proba)
+        X_raw, y_clf, y_days, y_amount = self._split_features_targets(train_df)
+        X = self._prepare_features_fit(X_raw)
 
-        # Избегаем деления на ноль
-        f1_scores = np.where(
-            (precision + recall) > 0,
-            2 * (precision * recall) / (precision + recall),
-            0
-        )
-
-        # thresholds на 1 элемент короче, чем precision/recall
-        if len(thresholds) > 0:
-            best_idx = np.argmax(f1_scores[:-1])
-            return float(thresholds[best_idx])
-        return 0.5
-
-    # ========= ОБУЧЕНИЕ =========
-
-    def fit(
-            self,
-            train_df: pd.DataFrame,
-            val_df: Optional[pd.DataFrame] = None,
-    ) -> Dict[str, float]:
-        """
-        Обучает три модели:
-        - классификатор will_purchase_next_7d
-        - регрессор days_to_next_purchase
-        - регрессор next_purchase_amount
-
-        Если val_df задан, сразу считает метрики на валидации.
-        """
-        self._log("🔧 Preparing features...")
-
-        # 1. Разделяем фичи и таргеты
-        X_train_raw, y_clf_train, y_days_train, y_amount_train = self._split_features_targets(train_df)
-
-        # 2. Препроцессинг фичей
-        X_train = self._prepare_features_fit(X_train_raw)
-        X_train_np = X_train.values
-        y_clf_np = y_clf_train.values
-
-        self._log(f"📊 Training data: {X_train.shape[0]} samples, {X_train.shape[1]} features")
-        self._log(f"📊 Positive class ratio: {y_clf_train.mean():.2%}")
-
-        # 3. Создаем модели
+        # --- 1. CLASSIFIER (Остается как был) ---
         if HAS_LIGHTGBM:
-            self._log("🚀 Using LightGBM")
-
-            # Подбор гиперпараметров для классификатора
             if self.use_optuna:
-                self._log(f"🔍 Optimizing classifier hyperparameters ({self.optuna_trials} trials)...")
-                self.best_params_clf_ = self._optimize_classifier(X_train_np, y_clf_np)
+                self._log("🔍 Tuning classifier...")
+                self.best_params_clf_ = self._optimize_classifier(X.values, y_clf.values)
+                self.best_params_clf_["class_weight"] = "balanced"
             else:
                 self.best_params_clf_ = {
-                    "n_estimators": 300,
-                    "learning_rate": 0.05,
-                    "max_depth": 6,
-                    "num_leaves": 63,
-                    "min_child_samples": 20,
-                    "subsample": 0.8,
-                    "colsample_bytree": 0.8,
-                    "reg_alpha": 0.1,
-                    "reg_lambda": 0.1,
-                    "random_state": self.random_state,
-                    "verbosity": -1,
-                    "n_jobs": -1,
+                    "n_estimators": 200, "learning_rate": 0.05, "max_depth": 5,
+                    "class_weight": "balanced", "random_state": self.random_state
                 }
-
             self.clf = lgb.LGBMClassifier(**self.best_params_clf_)
         else:
-            self._log("⚠️ LightGBM not found, using sklearn GradientBoosting (slower)")
-            self.clf = GradientBoostingClassifier(
-                n_estimators=200,
-                learning_rate=0.05,
-                max_depth=5,
-                subsample=0.8,
-                random_state=self.random_state,
-            )
+            self.clf = GradientBoostingClassifier(random_state=self.random_state)
 
-        # 4. Обучение классификатора
-        self._log("🎯 Training classifier...")
-        self.clf.fit(X_train_np, y_clf_np)
+        self.clf.fit(X.values, y_clf.values)
 
-        # 5. Калибровка вероятностей
-        if self.calibrate_proba:
-            self._log("📐 Calibrating probabilities...")
-            self.clf_calibrated = CalibratedClassifierCV(
-                self.clf, method="isotonic", cv=3
-            )
-            self.clf_calibrated.fit(X_train_np, y_clf_np)
+        # Threshold logic...
+        proba = self.clf.predict_proba(X.values)[:, 1]
+        precision, recall, thresholds = precision_recall_curve(y_clf.values, proba)
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        best_idx = np.argmax(f1)
+        calc_threshold = float(thresholds[best_idx]) if len(thresholds) > best_idx else 0.5
+        self.optimal_threshold_ = min(calc_threshold, 0.6)
+        self._log(f"📊 Threshold: {self.optimal_threshold_:.3f}")
 
-        # 6. Находим оптимальный порог
-        proba_train = self._get_proba(X_train_np)
-        self.optimal_threshold_ = self._find_optimal_threshold(y_clf_np, proba_train)
-        self._log(f"📊 Optimal classification threshold: {self.optimal_threshold_:.3f}")
+        # --- 2. REGRESSORS (ИСПРАВЛЕНО) ---
+        # Раньше мы учили только на тех, кто купит (y_days < 300).
+        # Теперь учим НА ВСЕХ, но для тех, кто не купит, ставим "потолок" (например, 30 дней).
+        # Это научит модель для "плохих" юзеров предсказывать долгий срок, а не 3 дня.
 
-        # 7. Обучение регрессоров (только на положительных примерах)
-        mask_pos = y_clf_train == 1
-        n_positive = mask_pos.sum()
-        self._log(f"📈 Training regressors on {n_positive} positive samples...")
+        X_reg = X.values
 
-        if n_positive >= 10:  # Минимум 10 примеров для адекватной регрессии
-            X_pos = X_train_np[mask_pos]
-            y_days_pos = y_days_train[mask_pos].values
-            y_amount_pos = y_amount_train[mask_pos].values
+        # Если y_days > 60 (значит покупки не было или она очень далеко),
+        # ставим 30 (наш горизонт UI).
+        # То есть учим модель: "Если он выглядит как труп, предсказывай 30 дней".
+        y_days_reg = np.clip(y_days.values, 0, 30)
 
-            if HAS_LIGHTGBM:
-                # Подбор гиперпараметров для регрессоров
-                if self.use_optuna and n_positive >= 30:
-                    self._log("🔍 Optimizing days regressor...")
-                    self.best_params_reg_days_ = self._optimize_regressor(X_pos, y_days_pos)
-                    self._log("🔍 Optimizing amount regressor...")
-                    self.best_params_reg_amount_ = self._optimize_regressor(X_pos, y_amount_pos)
-                else:
-                    base_reg_params = {
-                        "n_estimators": 200,
-                        "learning_rate": 0.05,
-                        "max_depth": 5,
-                        "num_leaves": 31,
-                        "min_child_samples": 10,
-                        "subsample": 0.8,
-                        "colsample_bytree": 0.8,
-                        "random_state": self.random_state,
-                        "verbosity": -1,
-                        "n_jobs": -1,
-                    }
-                    self.best_params_reg_days_ = base_reg_params.copy()
-                    self.best_params_reg_amount_ = base_reg_params.copy()
+        # Для суммы берем только реальные покупки, т.к. предсказывать чек для тех кто не купит - сложно
+        # Но чтобы не терять объем, можно заполнить средним чеком или 0.
+        # Лучше оставить обучение amount только на позитивах или заполнить медианой.
+        # Вариант: учим amount только на тех, кто реально покупал.
+        mask_buyers = y_clf.values == 1
 
-                self.reg_days = lgb.LGBMRegressor(**self.best_params_reg_days_)
-                self.reg_amount = lgb.LGBMRegressor(**self.best_params_reg_amount_)
-            else:
-                self.reg_days = GradientBoostingRegressor(
-                    n_estimators=200,
-                    learning_rate=0.05,
-                    max_depth=5,
-                    subsample=0.8,
-                    random_state=self.random_state,
-                )
-                self.reg_amount = GradientBoostingRegressor(
-                    n_estimators=200,
-                    learning_rate=0.05,
-                    max_depth=5,
-                    subsample=0.8,
-                    random_state=self.random_state,
-                )
-
-            self.reg_days.fit(X_pos, y_days_pos)
-            self.reg_amount.fit(X_pos, y_amount_pos)
+        # Чтобы размерности совпали для .fit, если используем разные выборки, нужны разные X
+        if mask_buyers.sum() > 50:
+            X_reg_amt = X.values[mask_buyers]
+            y_amt_reg = y_amount.values[mask_buyers]
         else:
-            self._log("⚠️ Too few positive samples, training regressors on all data")
-            if HAS_LIGHTGBM:
-                self.reg_days = lgb.LGBMRegressor(random_state=self.random_state, verbosity=-1)
-                self.reg_amount = lgb.LGBMRegressor(random_state=self.random_state, verbosity=-1)
-            else:
-                self.reg_days = GradientBoostingRegressor(random_state=self.random_state)
-                self.reg_amount = GradientBoostingRegressor(random_state=self.random_state)
+            X_reg_amt = X.values
+            y_amt_reg = y_amount.values
 
-            self.reg_days.fit(X_train_np, y_days_train.values)
-            self.reg_amount.fit(X_train_np, y_amount_train.values)
+        if HAS_LIGHTGBM:
+            reg_params = {
+                "n_estimators": 150, "learning_rate": 0.05, "max_depth": 5,
+                "random_state": self.random_state, "verbosity": -1
+            }
+            self.reg_days = lgb.LGBMRegressor(**reg_params)
+            self.reg_amount = lgb.LGBMRegressor(**reg_params)
+        else:
+            self.reg_days = GradientBoostingRegressor(random_state=self.random_state)
+            self.reg_amount = GradientBoostingRegressor(random_state=self.random_state)
 
-        # 8. Feature importance
-        self._compute_feature_importance(X_train)
+        # Дни учим на ВСЕХ (с клипом)
+        self.reg_days.fit(X_reg, y_days_reg)
 
-        # 9. Метрики на валидации (если есть)
-        metrics = {}
-        if val_df is not None and not val_df.empty:
-            self._log("📊 Evaluating on validation set...")
-            metrics = self.evaluate(val_df)
+        # Сумму учим только на ПОКУПАТЕЛЯХ (чтобы не учить модель предсказывать чек 0)
+        self.reg_amount.fit(X_reg_amt, y_amt_reg)
 
-        self._log("✅ Training complete!")
-        return metrics
-
-    def _get_proba(self, X: np.ndarray) -> np.ndarray:
-        """Получает вероятности с учетом калибровки."""
-        if self.calibrate_proba and self.clf_calibrated is not None:
-            return self.clf_calibrated.predict_proba(X)[:, 1]
-        return self.clf.predict_proba(X)[:, 1]
-
-    def _compute_feature_importance(self, X_train: pd.DataFrame):
-        """Вычисляет важность признаков."""
-        if HAS_LIGHTGBM and hasattr(self.clf, "feature_importances_"):
-            importance = self.clf.feature_importances_
+        # Feature Importance
+        if HAS_LIGHTGBM:
             self.feature_importance_ = pd.DataFrame({
-                "feature": X_train.columns,
-                "importance": importance
+                "feature": X.columns,
+                "importance": self.clf.feature_importances_
+            }).sort_values("importance", ascending=False)
+        elif hasattr(self.clf, "feature_importances_"):
+            self.feature_importance_ = pd.DataFrame({
+                "feature": X.columns,
+                "importance": self.clf.feature_importances_
             }).sort_values("importance", ascending=False)
 
-    # ========= ПРЕДСКАЗАНИЕ =========
+        return {"threshold": self.optimal_threshold_}
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Возвращает DataFrame с предсказаниями:
-        - purchase_proba
-        - will_purchase_pred (0/1)
-        - days_to_next_pred
-        - next_purchase_amount_pred
-        """
-        if any(m is None for m in [self.clf, self.reg_days, self.reg_amount]):
-            raise ValueError("Model is not fitted. Call fit() first.")
+        if self.clf is None:
+            raise ValueError("Not fitted")
 
-        # Убираем таргеты, если есть
-        X_raw = df.copy()
-        for col in ["will_purchase_next_7d", "days_to_next_purchase", "next_purchase_amount"]:
-            if col in X_raw.columns:
-                X_raw = X_raw.drop(columns=[col])
-
-        # Препроцессинг
-        X = self._prepare_features_infer(X_raw)
+        X = self._prepare_features_infer(df)
         X_np = X.values
 
-        # Классификация (с калиброванными вероятностями)
-        proba = self._get_proba(X_np)
-        will_purchase_pred = (proba >= self.optimal_threshold_).astype(int)
+        proba = self.clf.predict_proba(X_np)[:, 1]
+        pred_cls = (proba >= self.optimal_threshold_).astype(int)
 
-        # Регрессия
-        days_pred = self.reg_days.predict(X_np)
-        amount_pred = self.reg_amount.predict(X_np)
+        pred_days = self.reg_days.predict(X_np)
+        pred_amount = self.reg_amount.predict(X_np)
 
-        # Маскируем регрессионные предсказания для тех, у кого модель считает, что покупки не будет
-        days_pred = np.where(will_purchase_pred == 1, days_pred, 999.0)
-        amount_pred = np.where(will_purchase_pred == 1, amount_pred, 0.0)
+        pred_days = np.clip(pred_days, 0.1, 30)
+        pred_amount = np.clip(pred_amount, 10, None)
 
-        # Ограничиваем предсказания разумными значениями
-        days_pred = np.clip(days_pred, 0, 999)
-        amount_pred = np.clip(amount_pred, 0, None)
-
-        result = pd.DataFrame(
-            {
-                "purchase_proba": proba,
-                "will_purchase_pred": will_purchase_pred,
-                "days_to_next_pred": days_pred,
-                "next_purchase_amount_pred": amount_pred,
-            },
-            index=df.index,
-        )
-
-        return result
-
-    # ========= ОЦЕНКА =========
+        return pd.DataFrame({
+            "purchase_proba": proba,
+            "will_purchase_pred": pred_cls,
+            "days_to_next_pred": pred_days,
+            "next_purchase_amount_pred": pred_amount
+        }, index=df.index)
 
     def evaluate(self, df: pd.DataFrame) -> Dict[str, float]:
-        """
-        Считает метрики на переданном DataFrame с таргетами:
-        - AUC-ROC, PR-AUC, F1 для will_purchase_next_7d
-        - RMSE / MAE для дней до покупки (только на тех, где была покупка)
-        - RMSE / MAE для суммы покупки (только на тех, где была покупка)
-        """
-        X_raw, y_clf, y_days, y_amount = self._split_features_targets(df)
+        X_raw, y_clf, _, _ = self._split_features_targets(df)
         X = self._prepare_features_infer(X_raw)
-        X_np = X.values
-
-        proba = self._get_proba(X_np)
-        preds = (proba >= self.optimal_threshold_).astype(int)
-
-        metrics = {}
-
-        # Классификация
-        if len(np.unique(y_clf)) > 1:
-            metrics["auc_roc"] = roc_auc_score(y_clf, proba)
-            metrics["auc_pr"] = average_precision_score(y_clf, proba)
-            metrics["f1"] = f1_score(y_clf, preds)
-            metrics["threshold"] = self.optimal_threshold_
-        else:
-            metrics["auc_roc"] = float("nan")
-            metrics["auc_pr"] = float("nan")
-            metrics["f1"] = float("nan")
-            metrics["threshold"] = self.optimal_threshold_
-
-        # Регрессии — только на положительных примерах
-        mask_pos = y_clf == 1
-        if mask_pos.sum() > 0:
-            days_pred = self.reg_days.predict(X_np[mask_pos])
-            amount_pred = self.reg_amount.predict(X_np[mask_pos])
-
-            # ИСПРАВЛЕНО: теперь это действительно RMSE, а не MSE
-            metrics["rmse_days"] = np.sqrt(mean_squared_error(y_days[mask_pos], days_pred))
-            metrics["mae_days"] = mean_absolute_error(y_days[mask_pos], days_pred)
-
-            metrics["rmse_amount"] = np.sqrt(mean_squared_error(y_amount[mask_pos], amount_pred))
-            metrics["mae_amount"] = mean_absolute_error(y_amount[mask_pos], amount_pred)
-        else:
-            metrics["rmse_days"] = float("nan")
-            metrics["mae_days"] = float("nan")
-            metrics["rmse_amount"] = float("nan")
-            metrics["mae_amount"] = float("nan")
-
-        return metrics
+        proba = self.clf.predict_proba(X.values)[:, 1]
+        return {
+            "auc": roc_auc_score(y_clf, proba) if len(np.unique(y_clf)) > 1 else 0,
+            "avg_proba": float(proba.mean())
+        }
 
     def get_feature_importance(self, top_n: int = 20) -> Optional[pd.DataFrame]:
         """Возвращает топ-N важных признаков."""
@@ -619,50 +300,10 @@ class ContextAwareModel:
             return self.feature_importance_.head(top_n)
         return None
 
-    # ========= СЕРИАЛИЗАЦИЯ =========
-
     def save(self, path: str):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        state = {
-            "random_state": self.random_state,
-            "use_optuna": self.use_optuna,
-            "optuna_trials": self.optuna_trials,
-            "calibrate_proba": self.calibrate_proba,
-            "clf": self.clf,
-            "clf_calibrated": self.clf_calibrated,
-            "reg_days": self.reg_days,
-            "reg_amount": self.reg_amount,
-            "feature_columns_": self.feature_columns_,
-            "label_encoders_": self.label_encoders_,
-            "numeric_medians_": self.numeric_medians_,
-            "numeric_stds_": self.numeric_stds_,
-            "optimal_threshold_": self.optimal_threshold_,
-            "feature_importance_": self.feature_importance_,
-            "best_params_clf_": self.best_params_clf_,
-            "best_params_reg_days_": self.best_params_reg_days_,
-            "best_params_reg_amount_": self.best_params_reg_amount_,
-        }
-        joblib.dump(state, path)
+        joblib.dump(self, path)
 
     @classmethod
-    def load(cls, path: str) -> "ContextAwareModel":
-        state = joblib.load(path)
-        model = cls(
-            random_state=state.get("random_state", 42),
-            use_optuna=state.get("use_optuna", False),  # При загрузке не нужен Optuna
-            calibrate_proba=state.get("calibrate_proba", True),
-        )
-        model.clf = state["clf"]
-        model.clf_calibrated = state.get("clf_calibrated")
-        model.reg_days = state["reg_days"]
-        model.reg_amount = state["reg_amount"]
-        model.feature_columns_ = state["feature_columns_"]
-        model.label_encoders_ = state.get("label_encoders_", {})
-        model.numeric_medians_ = state.get("numeric_medians_", {})
-        model.numeric_stds_ = state.get("numeric_stds_", {})
-        model.optimal_threshold_ = state.get("optimal_threshold_", 0.5)
-        model.feature_importance_ = state.get("feature_importance_")
-        model.best_params_clf_ = state.get("best_params_clf_")
-        model.best_params_reg_days_ = state.get("best_params_reg_days_")
-        model.best_params_reg_amount_ = state.get("best_params_reg_amount_")
-        return model
+    def load(cls, path: str):
+        return joblib.load(path)

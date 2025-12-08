@@ -74,6 +74,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("data-gen")
 
+# Генерируем веса для товаров по закону Ципфа (популярность убывает)
+# item_1 будет самым популярным, item_200 — самым редким.
+item_ranks = range(1, len(ITEMS) + 1)
+# alpha=1.5 — сильный перекос (хиты очень популярны), alpha=1.1 — более плавный
+zipf_weights = [1.0 / (r ** 1.5) for r in item_ranks]
+total_weight = sum(zipf_weights)
+ITEM_PROBS = [w / total_weight for w in zipf_weights]
 
 # ----------------- Event factory -----------------
 def make_event(
@@ -82,7 +89,7 @@ def make_event(
         event_type: str,
         ts: datetime | None = None,
 ) -> dict:
-    item = random.choice(ITEMS)
+    item = random.choices(ITEMS, weights=ITEM_PROBS, k=1)[0]
 
     if ts is None:
         now = datetime.now(timezone.utc)
@@ -100,8 +107,11 @@ def make_event(
         "region": random.choice(REGIONS),
         "properties": {}
     }
+    base_price = 1000.0 / (int(item.split('_')[1]) + 1)  # Чем выше номер item, тем ниже "базовая" цена (условно)
+    price = round(random.uniform(base_price * 0.8, base_price * 1.2), 2)
+
     if event_type in ("product_view", "add_to_cart", "purchase", "click"):
-        ev["properties"] = {"item_id": item, "price": round(random.uniform(10, 500), 2)}
+        ev["properties"] = {"item_id": item, "price": max(10, price)}
     elif event_type == "search":
         ev["properties"] = {"query": random.choice(SEARCH_QUERIES)}
     return ev
@@ -236,8 +246,11 @@ async def run_generation(
         diversity: DiversityConfig,
 ):
     random.seed(seed)
-    event_distribution = [0.25, 0.25, 0.10, 0.02, 0.20, 0.18]
-
+    # ИЗМЕНЕНО: Более агрессивное распределение для демо
+    # Было: [0.25, 0.25, 0.10, 0.02, 0.20, 0.18] (purchase = 0.02)
+    # Стало: purchase = 0.08 (8%), add_to_cart = 0.20 (20%)
+    # Порядок: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
+    event_distribution = [0.15, 0.25, 0.20, 0.08, 0.12, 0.20]
     sem = asyncio.Semaphore(concurrency)
     timeout_obj = aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=timeout)
 

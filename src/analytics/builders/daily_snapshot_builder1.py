@@ -1,8 +1,9 @@
 import glob
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 
 EVENTS_DIR = "../data/parquet"
@@ -11,17 +12,19 @@ TRENDS_PATH = "../trends_data/trends_master.parquet"
 
 os.makedirs(OUT_DIR, exist_ok=True)
 
+
 def _print_progress(current, total, prefix=""):
     if not total:
         return
     current = max(0, min(current, total))
+    percent = (current / total) * 100
     bar_len = 30
     filled = int(bar_len * current / total)
     bar = "█" * filled + "-" * (bar_len - filled)
-    percent = (current / total) * 100
     print(f"\r{prefix} [{bar}] {current}/{total} ({percent:.0f}%)", end="", flush=True)
     if current >= total:
         print()
+
 
 def _get_logger():
     logger = logging.getLogger("daily_snapshot_builder1")
@@ -38,9 +41,10 @@ def _get_logger():
         fh.setLevel(logging.INFO)
         fh.setFormatter(fmt)
         logger.addHandler(fh)
-    except Exception as e:
-        logger.warning(f"Не удалось создать файловый логгер: {e}")
+    except Exception:
+        pass
     return logger
+
 
 def load_events(events_dir):
     logger = _get_logger()
@@ -49,145 +53,193 @@ def load_events(events_dir):
         raise FileNotFoundError(f"No parquet files in {events_dir}")
     parts = []
     for i, fpath in enumerate(files, start=1):
-        parts.append(pd.read_parquet(fpath))
+        try:
+            parts.append(pd.read_parquet(fpath))
+        except Exception:
+            pass
         _print_progress(i, len(files), prefix="Загрузка parquet файлов")
+
+    if not parts:
+        return pd.DataFrame()
+
     df = pd.concat(parts, ignore_index=True)
     df["ts"] = pd.to_datetime(df["ts"], utc=True)
     df["date"] = df["ts"].dt.date
     if 'price' in df.columns:
         df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0.0)
+
     logger.info(f"Загружено {len(df)} событий ({df['date'].min()} - {df['date'].max()})")
     return df
 
-def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
-    logger = _get_logger()
 
-    # 0. Проверка файла
+def load_trends(trends_path: str = TRENDS_PATH):
+    logger = _get_logger()
     if not os.path.exists(trends_path):
-        logger.info(f"Файл трендов не найден: {trends_path} — продолжаем без тренд‑фич")
+        logger.info("Тренды не найдены, пропускаем")
         return {}
 
     try:
         df = pd.read_parquet(trends_path)
-    except Exception as e:
-        logger.warning(f"Не удалось прочитать тренды из {trends_path}: {e}")
+    except Exception:
         return {}
 
-    if df.empty:
-        logger.info("Файл трендов пустой — пропускаем")
+    if df.empty or "date" not in df.columns or "popularity" not in df.columns:
         return {}
 
-    if "date" not in df.columns or "popularity" not in df.columns:
-        logger.info("Тренды отсутствуют или некорректны — пропускаем")
-        return {}
-
-    # 1. Приводим типы
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     df["popularity"] = pd.to_numeric(df["popularity"], errors="coerce")
 
-    # 2. Агрегируем по тем датам, которые есть (как отдаёт Google Trends)
     daily = (
         df.dropna(subset=["popularity"])
         .groupby("date")["popularity"]
-        .agg(
-            trend_popularity_mean="mean",
-            trend_popularity_max="max",
-        )
+        .agg(trend_popularity_mean="mean", trend_popularity_max="max")
         .sort_index()
     )
 
     if daily.empty:
-        logger.info("Тренды после агрегации пустые — продолжаем без тренд‑фич")
         return {}
 
-    # 3. Разворачиваем в сплошной дневной ряд и тянем значения вперёд
     full_index = pd.date_range(daily.index.min(), daily.index.max(), freq="D")
     daily = daily.reindex(full_index).ffill()
-
-    # Индекс делаем типом date, чтобы совпадал с snapshot_date / date
     daily.index = daily.index.date
 
-    logger.info(
-        f"Загружены тренды для {len(daily)} дней "
-        f"({daily.index.min()} - {daily.index.max()})"
-    )
-
-    # daily_snapshot_builder1, судя по коду, ожидает dict[date] -> {feature_name: value}
+    logger.info(f"Загружены тренды для {len(daily)} дней")
     return daily.to_dict(orient="index")
+
 
 def build_daily_snapshot(df, trends_dict=None):
     logger = _get_logger()
     if df.empty:
         return pd.DataFrame()
-    last_date = df['date'].max()
-    logger.info(f"Создаём снапшот за {last_date}")
+
+    # Строим снапшот на "сегодня" (последнюю доступную дату данных)
+    target_date = df['date'].max()
+    target_ts = pd.Timestamp(datetime.combine(target_date, datetime.max.time())).tz_localize('UTC')
+
+    logger.info(f"Создаём снапшот за {target_date}")
+
     has_item = 'item_id' in df.columns
     has_region = 'region' in df.columns
+
     users = df['user_id'].unique()
     snapshots = []
 
     for idx, user_id in enumerate(users, start=1):
+        # Берем всю историю пользователя
         user_events = df[df['user_id'] == user_id].sort_values('ts')
         if user_events.empty:
             continue
-        user_day = last_date
-        day_events = user_events[user_events['date'] <= user_day]
-        if day_events.empty:
+
+        # Фильтруем события до целевой даты (включительно)
+        # В данном случае, так как мы берем max date, это все события, но логика универсальна
+        history = user_events[user_events['date'] <= target_date]
+        if history.empty:
             continue
 
-        total_events = len(day_events)
-        total_clicks = (day_events['event_type'] == 'click').sum()
-        total_purchases = (day_events['event_type'] == 'purchase').sum()
-        total_spent = day_events['price'].sum() if 'price' in day_events.columns else 0.0
-        seen_items = set(day_events['item_id'].dropna().astype(str)) if has_item else set()
-        first_ts = user_events['ts'].iloc[0]
-        last_ts = day_events['ts'].iloc[-1]
-        days_since_first = (pd.Timestamp(datetime.combine(user_day, datetime.max.time())).tz_localize('UTC') - first_ts).days
-        days_since_last = (pd.Timestamp(datetime.combine(user_day, datetime.max.time())).tz_localize('UTC') - last_ts).days
-        events_per_day = total_events / max(1, len(day_events['date'].unique()))
-        last_row = day_events.iloc[-1]
-        last_event_type = last_row.get('event_type', None)
-        last_region = last_row['region'] if has_region else None
-        last_item = last_row['item_id'] if has_item else None
+        # --- Базовые метрики (Lifetime) ---
+        total_events = len(history)
+        total_clicks = (history['event_type'] == 'click').sum()
+        total_purchases = (history['event_type'] == 'purchase').sum()
+        total_spent = history['price'].sum() if 'price' in history.columns else 0.0
+
+        # --- Даты и Recency ---
+        first_ts = history['ts'].iloc[0]
+        last_ts = history['ts'].iloc[-1]
+
+        days_since_first = (target_ts - first_ts).days
+        days_since_last = (target_ts - last_ts).days
+
+        unique_active_days = len(history['date'].unique())
+        events_per_day = total_events / max(1, unique_active_days)
+
+        # --- ROLLING METRICS (Новое!) ---
+        # Эффективный расчет скользящих окон
+        hist_dates = history['date'].values
+        target_date_np = np.datetime64(target_date)
+
+        # Mask for last 7 days
+        mask_7d = (hist_dates > target_date_np - np.timedelta64(7, 'D'))
+        events_last_7d = np.sum(mask_7d)
+
+        # Mask for last 30 days
+        mask_30d = (hist_dates > target_date_np - np.timedelta64(30, 'D'))
+        events_last_30d = np.sum(mask_30d)
+
+        purchases_last_30d = 0
+        spent_last_30d = 0.0
+
+        if mask_30d.any():
+            subset_30d = history[mask_30d]
+            purchases_last_30d = (subset_30d['event_type'] == 'purchase').sum()
+            if 'price' in subset_30d.columns:
+                spent_last_30d = subset_30d['price'].sum()
+
+        # --- Контекст ---
+        seen_items = set(history['item_id'].dropna().astype(str)) if has_item else set()
+        last_row = history.iloc[-1]
+        unique_active_days = len(history['date'].unique()) # <--- Это считалось
 
         row = {
-            "snapshot_date": user_day,
+            "snapshot_date": target_date,
             "user_id": user_id,
-            "total_events": total_events,
-            "total_clicks": total_clicks,
-            "total_purchases": total_purchases,
+            # Lifetime
+            "total_events": int(total_events),
+            "unique_days": int(unique_active_days),  # <--- ДОБАВЬ ЭТУ СТРОКУ!
+            "total_clicks": int(total_clicks),
+            "total_purchases": int(total_purchases),
             "total_spent": float(total_spent),
             "distinct_items": len(seen_items),
-            "days_since_first": days_since_first,
-            "days_since_last": days_since_last,
-            "events_per_day": events_per_day,
-            "last_event_type": last_event_type,
-            "last_region": last_region,
-            "last_item": last_item,
+            # Rolling
+            "events_last_7d": int(events_last_7d),
+            "events_last_30d": int(events_last_30d),
+            "purchases_last_30d": int(purchases_last_30d),
+            "spent_last_30d": float(spent_last_30d),
+            # Recency
+            "days_since_first": int(days_since_first),
+            "days_since_last": int(days_since_last),
+            "events_per_day": float(events_per_day),
+            # Last Context
+            "last_event_type": last_row.get('event_type'),
+            "last_region": last_row.get('region') if has_region else None,
+            "last_item": last_row.get('item_id') if has_item else None,
         }
+
         if trends_dict:
-            t = trends_dict.get(user_day)
-            if t is not None:
-                row.update(t)
+            t = trends_dict.get(target_date)
+            if t: row.update(t)
+
         snapshots.append(row)
-        _print_progress(idx, len(users), prefix="Построение daily snapshot")
+        _print_progress(idx, len(users), prefix="Daily Snapshot")
 
     result = pd.DataFrame(snapshots)
     logger.info(f"Снапшот готов: {len(result)} строк")
     return result
 
+
 def main():
     logger = _get_logger()
     logger.info("Запуск daily_snapshot_builder1")
+
+    # 1. Грузим сырые данные
     df = load_events(EVENTS_DIR)
+    if df.empty:
+        logger.warning("Нет данных для построения!")
+        return
+
+    # 2. Грузим тренды
     trends_dict = load_trends(TRENDS_PATH)
+
+    # 3. Строим снапшот на последнюю дату
     snapshot = build_daily_snapshot(df, trends_dict=trends_dict)
+
+    # 4. Сохраняем
     if not snapshot.empty:
-        out_path = os.path.join(OUT_DIR,"daily_snapshot1.parquet")
+        out_path = os.path.join(OUT_DIR, "daily_snapshot1.parquet")
         snapshot.to_parquet(out_path, index=False)
         logger.info(f"Снапшот сохранён в {out_path}")
     else:
-        logger.warning("Нет данных для сохранения")
+        logger.warning("Снапшот пуст")
+
 
 if __name__ == "__main__":
     main()

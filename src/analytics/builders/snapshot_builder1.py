@@ -160,157 +160,133 @@ def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
 
 def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataFrame | None = None):
     """
-    Оптимизированное построение snapshots с логированием прогресса.
-
-    Основная оптимизация:
-    - Обработка по пользователям с накапливанием метрик во времени (без полного пересчёта на каждый день).
-    - Быстрый расчёт целевой переменной через бинарный поиск по покупкам пользователя.
+    Оптимизированное построение snapshots.
+    Добавлены Rolling Features (last_7d, last_30d) для лучшего качества модели.
     """
     logger = _get_logger()
 
-    # Подготовка трендов для быстрого доступа
+    # Подготовка трендов
     trends_dict = {}
     if trends_daily is not None and not trends_daily.empty:
         trends_dict = trends_daily.to_dict(orient="index")
         logger.info(f"Тренд‑фичи будут использованы для {len(trends_dict)} дней")
 
-    # Уникальные даты для snapshots
     all_dates = sorted(df['date'].unique())
     total_days = len(all_dates)
     logger.info(f"Будет создано snapshots на {total_days} дней")
 
-    # Предварительные признаки
     has_item = 'item_id' in df.columns
     has_region = 'region' in df.columns
 
-    # Группировка по пользователям один раз
     users = df['user_id'].unique()
     n_users = len(users)
     logger.info(f"Пользователей к обработке: {n_users}")
 
     snapshots = []
 
-    # Для каждого пользователя строим временной профиль и генерируем строки снапшотов
     for u_idx, user_id in enumerate(users, start=1):
+        # Берем все события пользователя
         user_events = df[df['user_id'] == user_id].sort_values('ts')
         if user_events.empty:
             continue
 
         first_ts = user_events['ts'].iloc[0]
 
-        # Агрегаты по дням для пользователя
-        # Считаем события по типам за день
-        clicks_mask = (user_events['event_type'] == 'click')
-        purchases_mask = (user_events['event_type'] == 'purchase')
+        # Превращаем даты событий в индексы для быстрого поиска в окне
+        event_dates = user_events['date'].values
+        event_prices = user_events['price'].fillna(0.0).values
+        event_types = user_events['event_type'].values
 
-        # Подсчёты за день
+        # Кэшируем покупки для таргета
+        purchases_mask = (event_types == 'purchase')
+        purchases_df = user_events[purchases_mask]
+
+        purchases_ord = []
+        purchase_amounts = []
+        if not purchases_df.empty:
+            purchases_ord = [d.toordinal() for d in purchases_df['date'].tolist()]
+            purchase_amounts = purchases_df['price'].fillna(0.0).astype(float).tolist()
+
+        # Агрегаты по дням (для кумулятивных счетчиков)
         per_day_counts = (
             user_events.groupby('date')
             .agg(
                 total_events=('event_type', 'size'),
                 total_clicks=('event_type', lambda s: (s == 'click').sum()),
                 total_purchases=('event_type', lambda s: (s == 'purchase').sum()),
-                total_spent=(
-                    'price',
-                    lambda s: float(pd.to_numeric(s, errors='coerce').fillna(0.0).sum())
-                ),
+                total_spent=('price', lambda s: s.fillna(0.0).sum()),
             )
             .sort_index()
         )
 
-        # Последние значения за день (для "last_*" и last_ts)
-        last_rows_per_day = (
-            user_events.sort_values('ts')
-            .groupby('date', as_index=True)
-            .tail(1)
-            .set_index('date')
-        )
+        # Last values helper
+        last_rows_per_day = user_events.groupby('date').tail(1).set_index('date')
 
-        # Множества товаров за день (для кумулятивного distinct_items)
+        # Set of items helper
+        items_per_day = pd.Series(dtype=object)
         if has_item:
-            items_per_day = (
-                user_events.dropna(subset=['item_id'])
-                .groupby('date')['item_id']
-                .apply(lambda s: set(s.astype(str).tolist()))
-            )
-        else:
-            items_per_day = pd.Series(dtype=object)
+            items_per_day = user_events.dropna(subset=['item_id']).groupby('date')['item_id'].apply(set)
 
-        # Даты с активностью пользователя
-        user_days = list(per_day_counts.index)
-        if not user_days:
-            continue
+        user_active_days = list(per_day_counts.index)
+        start_idx = np.searchsorted(all_dates, user_active_days[0], side='left')
 
-        # Начинаем создавать строки со дня первого появления пользователя до последнего дня всех данных
-        start_idx = np.searchsorted(all_dates, user_days[0], side='left')
-
-        # Кумаулятивные переменные
-        cum_total_events = 0
-        cum_total_clicks = 0
-        cum_total_purchases = 0
-        cum_total_spent = 0.0
-        cum_unique_days = 0
+        # Кумулятивные переменные
+        cum = {
+            "events": 0, "clicks": 0, "purchases": 0, "spent": 0.0, "days": 0
+        }
         seen_items = set()
-        last_event_type = None
-        last_region = None
-        last_item = None
-        last_ts = None
+        last_vals = {
+            "type": None, "region": None, "item": None, "ts": None
+        }
 
-        # Указатель по дням пользователя
         pd_ptr = 0
-        n_user_days = len(user_days)
-
-        # Подготовка покупок для таргета (по датам)
-        purchases_df = user_events[purchases_mask]
-        if not purchases_df.empty:
-            purchase_dates = purchases_df['date'].tolist()
-            purchase_amounts = pd.to_numeric(purchases_df['price'], errors='coerce').fillna(0.0).astype(float).tolist()
-            purchases_ord = [d.toordinal() for d in purchase_dates]
-        else:
-            purchases_ord = []
-            purchase_amounts = []
+        n_user_days = len(user_active_days)
 
         for d in all_dates[start_idx:]:
-            # Обновляем кумулятивные величины, пока не догоним текущую дату снапшота
-            while pd_ptr < n_user_days and user_days[pd_ptr] <= d:
-                day = user_days[pd_ptr]
+            # 1. Обновляем кумулятивные (исторические) данные
+            while pd_ptr < n_user_days and user_active_days[pd_ptr] <= d:
+                day = user_active_days[pd_ptr]
                 agg = per_day_counts.loc[day]
-                cum_total_events += int(agg['total_events'])
-                cum_total_clicks += int(agg['total_clicks'])
-                cum_total_purchases += int(agg['total_purchases'])
-                cum_total_spent += float(agg['total_spent'])
-                cum_unique_days += 1
 
-                # Последние значения дня
+                cum["events"] += int(agg['total_events'])
+                cum["clicks"] += int(agg['total_clicks'])
+                cum["purchases"] += int(agg['total_purchases'])
+                cum["spent"] += float(agg['total_spent'])
+                cum["days"] += 1
+
                 if day in last_rows_per_day.index:
                     lr = last_rows_per_day.loc[day]
-                    last_event_type = lr.get('event_type', last_event_type)
-                    if has_region:
-                        last_region = lr.get('region', last_region)
-                    if has_item:
-                        last_item = lr.get('item_id', last_item)
-                    last_ts = lr.get('ts', last_ts)
+                    last_vals["type"] = lr.get('event_type')
+                    last_vals["ts"] = lr.get('ts')
+                    if has_region: last_vals["region"] = lr.get('region')
+                    if has_item: last_vals["item"] = lr.get('item_id')
 
-                # уникальные товары
                 if has_item and day in items_per_day.index:
                     seen_items.update(items_per_day.loc[day])
 
                 pd_ptr += 1
 
-            # Если на текущий момент у пользователя ещё нет ни одного события — пропускаем строку
-            if cum_total_events == 0:
+            if cum["events"] == 0:
                 continue
 
-            # Даты/времена для расчётов интервалов
-            snapshot_datetime = pd.Timestamp(
-                datetime.combine(d, datetime.max.time())
-            ).tz_localize('UTC')
+            # 2. Рассчитываем ROLLING WINDOWS (Скользящие окна) - Самая важная часть!
+            # Фильтруем события, которые произошли в диапазоне [d - 7 дней, d]
+            mask_7d = (event_dates > d - timedelta(days=7)) & (event_dates <= d)
+            mask_30d = (event_dates > d - timedelta(days=30)) & (event_dates <= d)
 
-            # Фичи времени
-            days_since_first = (snapshot_datetime - first_ts).days if first_ts is not None else 999
-            days_since_last = (snapshot_datetime - last_ts).days if last_ts is not None else 0
+            events_last_7d = np.sum(mask_7d)
+            events_last_30d = np.sum(mask_30d)
 
-            # Цель: следующая покупка в горизонте
+            # Покупки и траты за 30 дней
+            purchases_last_30d = np.sum((event_types[mask_30d] == 'purchase'))
+            spent_last_30d = np.sum(event_prices[mask_30d])
+
+            # 3. Даты
+            snapshot_datetime = pd.Timestamp(datetime.combine(d, datetime.max.time())).tz_localize('UTC')
+            days_since_first = (snapshot_datetime - first_ts).days if first_ts else 999
+            days_since_last = (snapshot_datetime - last_vals["ts"]).days if last_vals["ts"] else 0
+
+            # 4. Таргет (Will Purchase)
             will_purchase = 0
             days_to_next = 999
             next_amount = 0.0
@@ -318,54 +294,57 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
                 s_ord = d.toordinal()
                 idx = bisect_right(purchases_ord, s_ord)
                 if idx < len(purchases_ord):
-                    delta_days = purchases_ord[idx] - s_ord
-                    if 0 < delta_days <= horizon_days:
+                    delta = purchases_ord[idx] - s_ord
+                    if 0 < delta <= horizon_days:
                         will_purchase = 1
-                        days_to_next = delta_days
+                        days_to_next = delta
                         next_amount = float(purchase_amounts[idx])
 
             row = {
                 "snapshot_date": d,
                 "user_id": user_id,
-                "total_events": int(cum_total_events),
-                "unique_days": int(cum_unique_days),
-                "total_clicks": int(cum_total_clicks),
-                "total_purchases": int(cum_total_purchases),
-                "total_spent": float(cum_total_spent),
-                "distinct_items": int(len(seen_items)) if has_item else 0,
+                # Cumulative
+                "total_events": int(cum["events"]),
+                "unique_days": int(cum["days"]),
+                "total_clicks": int(cum["clicks"]),
+                "total_purchases": int(cum["purchases"]),
+                "total_spent": float(cum["spent"]),
+                "distinct_items": int(len(seen_items)),
+                # Rolling (NEW!)
+                "events_last_7d": int(events_last_7d),
+                "events_last_30d": int(events_last_30d),
+                "purchases_last_30d": int(purchases_last_30d),
+                "spent_last_30d": float(spent_last_30d),
+                # Recency / Intensity
                 "days_since_first": int(days_since_first),
                 "days_since_last": int(days_since_last),
-                "events_per_day": float(cum_total_events / max(1, cum_unique_days)),
-                "last_event_type": last_event_type,
-                "last_region": last_region if has_region else None,
-                "last_item": last_item if has_item else None,
+                "events_per_day": float(cum["events"] / max(1, cum["days"])),
+                # Last Context
+                "last_event_type": last_vals["type"],
+                "last_region": last_vals["region"],
+                "last_item": last_vals["item"],
+                # Targets
                 "will_purchase_next_7d": int(will_purchase),
                 "days_to_next_purchase": int(days_to_next),
                 "next_purchase_amount": float(next_amount),
             }
 
-            # Добавляем тренд‑фичи для текущей даты, если доступны
             if trends_dict:
                 t = trends_dict.get(d)
-                if t is not None:
-                    row.update(t)
+                if t: row.update(t)
 
             snapshots.append(row)
 
-        # Прогресс по пользователям
-        _print_progress(u_idx, n_users, prefix="Построение snapshots по пользователям")
+        _print_progress(u_idx, n_users, prefix="Построение snapshots")
 
-    # Формируем DataFrame из всех строк
     if snapshots:
         result = pd.DataFrame(snapshots)
         logger.info(f"\nСоздано {len(result)} snapshots")
-        pos = int(result['will_purchase_next_7d'].sum())
-        logger.info(f"Положительных примеров: {pos} ({pos / max(1, len(result)):.2%})")
+        pos = result['will_purchase_next_7d'].sum()
+        logger.info(f"Положительных: {pos} ({pos / len(result):.2%})")
         return result
     else:
-        logger.warning("Не удалось построить ни одного снапшота")
         return pd.DataFrame()
-
 
 def split_and_save_simple(snaps_df, out_dir):
     """Простое разделение по времени и сохранение"""

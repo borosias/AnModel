@@ -241,16 +241,59 @@ export default function Dashboard() {
 
     const handleResetToDefault = () => {
         const defaultData: Record<string, any> = {};
+
         modelFeatures.forEach(feature => {
-            if (feature === "total_events") defaultData[feature] = 100;
-            else if (feature === "total_purchases") defaultData[feature] = 3;
-            else if (feature === "days_since_last_event") defaultData[feature] = 5;
-            else if (feature === "avg_spend_per_purchase_30d") defaultData[feature] = 1200;
-            else defaultData[feature] = 0;
+            switch (feature) {
+                // Основные
+                case "total_events":
+                    defaultData[feature] = 150;
+                    break;
+                case "total_purchases":
+                    defaultData[feature] = 5;
+                    break;
+                case "total_spent":
+                    defaultData[feature] = 5000;
+                    break;
+                case "days_since_last":
+                    defaultData[feature] = 1;
+                    break; // Активный юзер
+                case "days_since_first":
+                    defaultData[feature] = 60;
+                    break;
+
+                // Rolling (Важно для новой модели)
+                case "events_last_7d":
+                    defaultData[feature] = 20;
+                    break;
+                case "events_last_30d":
+                    defaultData[feature] = 50;
+                    break;
+                case "purchases_last_30d":
+                    defaultData[feature] = 1;
+                    break;
+                case "spent_last_30d":
+                    defaultData[feature] = 1000;
+                    break;
+
+                // Тренды
+                case "trend_popularity_mean":
+                    defaultData[feature] = 50;
+                    break;
+
+                // Строковые
+                case "last_event_type":
+                    defaultData[feature] = "click";
+                    break;
+                case "last_region":
+                    defaultData[feature] = "UA-30";
+                    break;
+
+                default:
+                    defaultData[feature] = 0;
+            }
         });
         setInputData(defaultData);
     };
-
     const serviceOptions = services
         ? services.services.map(name => ({
             name,
