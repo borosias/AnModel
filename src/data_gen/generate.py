@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -22,26 +24,17 @@ from postgres_load import load_users
 class DiversityConfig:
     """
     Параметры для управления разнообразием генерируемых данных.
-
-    Все параметры можно менять без изменения логики — просто подбирай значения.
     """
-
     # --- Активность пользователей ---
-    # Логнормальное распределение: activity = base * exp(N(mu, sigma))
-    # mu=0, sigma=0 → все одинаковые
-    # mu=0, sigma=0.7 → разброс ~0.3x–3x (умеренный)
-    # mu=0, sigma=1.0 → разброс ~0.1x–7x (сильный)
     activity_mu: float = 0.0
     activity_sigma: float = 0.7
 
-    # Ограничения на итоговое количество событий
     min_events_per_user: int = 5
-    max_events_multiplier: float = 5.0  # макс = base * multiplier
+    max_events_multiplier: float = 5.0
 
     # --- Временное окно активности пользователя ---
-    # Каждый юзер активен в своём "окне" внутри последнего года
-    min_activity_span_days: int = 14  # минимум дней активности
-    max_activity_span_days: int = 365  # максимум
+    min_activity_span_days: int = 14
+    max_activity_span_days: int = 365
 
     # --- Интервалы между сессиями ---
     min_days_between_sessions: int = 0
@@ -49,11 +42,65 @@ class DiversityConfig:
 
     # --- Интервалы между событиями внутри сессии (секунды) ---
     min_seconds_between_events: int = 10
-    max_seconds_between_events: int = 900  # 15 минут
+    max_seconds_between_events: int = 900
 
     # --- Размер сессий ---
-    # Используется экспоненциальное распределение: avg_session_size = 1/lambda
-    session_size_lambda: float = 1 / 3  # в среднем ~3 события на сессию
+    session_size_lambda: float = 1 / 3
+
+
+# ============================================================================
+# USER COHORTS: профили пользователей для реалистичного поведения
+# ============================================================================
+@dataclass
+class UserCohort:
+    """Профиль когорты пользователей."""
+    name: str
+    events_multiplier: float      # множитель на base events
+    span_days_range: tuple        # (min, max) дней активности
+    session_size_lambda: float    # lambda для размера сессий
+    purchase_boost: float         # множитель вероятности purchase в Markov
+
+
+USER_COHORTS = {
+    "heavy": UserCohort(
+        name="heavy",
+        events_multiplier=3.0,
+        span_days_range=(180, 365),
+        session_size_lambda=1/5,   # большие сессии
+        purchase_boost=1.5,
+    ),
+    "medium": UserCohort(
+        name="medium",
+        events_multiplier=1.0,
+        span_days_range=(60, 180),
+        session_size_lambda=1/3,
+        purchase_boost=1.0,
+    ),
+    "light": UserCohort(
+        name="light",
+        events_multiplier=0.4,
+        span_days_range=(14, 60),
+        session_size_lambda=1/2,
+        purchase_boost=0.7,
+    ),
+    "one_time": UserCohort(
+        name="one_time",
+        events_multiplier=0.15,
+        span_days_range=(1, 7),
+        session_size_lambda=1/2,
+        purchase_boost=0.5,
+    ),
+}
+
+COHORT_DISTRIBUTION = ["heavy", "medium", "medium", "light", "light", "light", "one_time"]
+
+
+def get_user_cohort(user_id: str, seed: int = 42) -> UserCohort:
+    """Детерминированно выбирает когорту для пользователя."""
+    # Используем hash для детерминированности
+    h = hash((user_id, seed)) % len(COHORT_DISTRIBUTION)
+    cohort_name = COHORT_DISTRIBUTION[h]
+    return USER_COHORTS[cohort_name]
 
 
 # Дефолтный конфиг — можно переопределить через CLI или отдельный файл
@@ -81,6 +128,21 @@ item_ranks = range(1, len(ITEMS) + 1)
 zipf_weights = [1.0 / (r ** 1.5) for r in item_ranks]
 total_weight = sum(zipf_weights)
 ITEM_PROBS = [w / total_weight for w in zipf_weights]
+
+# ============================================================================
+# MARKOV TRANSITIONS: условные вероятности следующего события
+# ============================================================================
+# Порядок EVENTS: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
+# Каждая строка — распределение вероятностей следующего события после данного
+MARKOV_TRANSITIONS = {
+    "page_view":     [0.15, 0.35, 0.10, 0.02, 0.18, 0.20],  # после page_view часто product_view
+    "product_view":  [0.08, 0.15, 0.35, 0.12, 0.10, 0.20],  # после product_view часто add_to_cart
+    "add_to_cart":   [0.05, 0.10, 0.15, 0.45, 0.05, 0.20],  # после add_to_cart высока вероятность purchase!
+    "purchase":      [0.30, 0.25, 0.05, 0.02, 0.18, 0.20],  # после purchase — новый цикл
+    "search":        [0.10, 0.45, 0.10, 0.02, 0.13, 0.20],  # после search часто product_view
+    "click":         [0.15, 0.35, 0.15, 0.05, 0.10, 0.20],  # после click часто product_view
+}
+
 
 # ----------------- Event factory -----------------
 def make_event(
@@ -114,6 +176,63 @@ def make_event(
         ev["properties"] = {"item_id": item, "price": max(10, price)}
     elif event_type == "search":
         ev["properties"] = {"query": random.choice(SEARCH_QUERIES)}
+    return ev
+
+
+def make_event_contextual(
+        user_id: str,
+        session_id: str,
+        event_type: str,
+        ts: datetime | None = None,
+        current_item: str | None = None,
+) -> dict:
+    """
+    Создание события с учётом контекста сессии.
+
+    Если current_item задан и событие связано с товаром (add_to_cart, purchase),
+    с высокой вероятностью используем тот же item — это создаёт реалистичные цепочки.
+    """
+    # Решаем, использовать ли текущий item или выбрать новый
+    if current_item and event_type in ("add_to_cart", "purchase"):
+        # 70% — продолжаем с тем же товаром, 30% — новый
+        if random.random() < 0.7:
+            item = current_item
+        else:
+            item = random.choices(ITEMS, weights=ITEM_PROBS, k=1)[0]
+    elif current_item and event_type == "click":
+        # 50% — тот же товар
+        if random.random() < 0.5:
+            item = current_item
+        else:
+            item = random.choices(ITEMS, weights=ITEM_PROBS, k=1)[0]
+    else:
+        item = random.choices(ITEMS, weights=ITEM_PROBS, k=1)[0]
+
+    if ts is None:
+        now = datetime.now(timezone.utc)
+        year_ago = now - timedelta(days=365)
+        total_sec = int((now - year_ago).total_seconds())
+        rand_sec = random.randint(0, total_sec)
+        ts = year_ago + timedelta(seconds=rand_sec)
+
+    ev = {
+        "event_id": str(uuid.uuid4()),
+        "event_type": event_type,
+        "timestamp": ts.isoformat(),
+        "session_id": session_id,
+        "user_id": user_id,
+        "region": random.choice(REGIONS),
+        "properties": {}
+    }
+
+    base_price = 1000.0 / (int(item.split('_')[1]) + 1)
+    price = round(random.uniform(base_price * 0.8, base_price * 1.2), 2)
+
+    if event_type in ("product_view", "add_to_cart", "purchase", "click"):
+        ev["properties"] = {"item_id": item, "price": max(10, price)}
+    elif event_type == "search":
+        ev["properties"] = {"query": random.choice(SEARCH_QUERIES)}
+
     return ev
 
 
@@ -152,23 +271,28 @@ async def produce_for_user(
     """
     Генерация событий для одного пользователя с настраиваемым разнообразием.
     """
-    # --- 1. Индивидуальная интенсивность ---
+    # --- НОВОЕ: Получаем когорту пользователя ---
+    cohort = get_user_cohort(user_id)
+
+    # --- 1. Индивидуальная интенсивность (с учётом когорты) ---
     activity_factor = random.lognormvariate(
         mu=diversity.activity_mu,
         sigma=diversity.activity_sigma
     )
-    target_events = int(events_per_user * activity_factor)
+    # Применяем множитель когорты
+    target_events = int(events_per_user * activity_factor * cohort.events_multiplier)
     target_events = max(diversity.min_events_per_user, target_events)
     target_events = min(target_events, int(events_per_user * diversity.max_events_multiplier))
 
-    # --- 2. Временное окно активности ---
+    # --- 2. Временное окно активности (с учётом когорты) ---
     now = datetime.now(timezone.utc)
     year_ago = now - timedelta(days=365)
 
-    span_days = random.randint(
-        diversity.min_activity_span_days,
-        diversity.max_activity_span_days
-    )
+    # ИСПРАВЛЕНО: безопасное вычисление span_days
+    span_min = max(diversity.min_activity_span_days, cohort.span_days_range[0])
+    span_max = max(span_min, min(diversity.max_activity_span_days, cohort.span_days_range[1]))
+
+    span_days = random.randint(span_min, span_max)
 
     latest_start = now - timedelta(days=span_days)
     if latest_start > year_ago:
@@ -181,17 +305,20 @@ async def produce_for_user(
 
     current_ts = user_start
 
+    prev_event_type = None
+    current_item = None
+
     # --- 3. Генерация сессий и событий ---
     i = 0
     while i < target_events:
         remaining = target_events - i
+        # Используем lambda из когорты
         session_size = min(
             remaining,
-            max(1, int(random.expovariate(diversity.session_size_lambda)) + 1)
+            max(1, int(random.expovariate(cohort.session_size_lambda)) + 1)
         )
         session_id = str(uuid.uuid4())
 
-        # Между сессиями
         if i > 0:
             jump_days = random.randint(
                 diversity.min_days_between_sessions,
@@ -199,6 +326,8 @@ async def produce_for_user(
             )
             jump_seconds = random.randint(0, 6 * 60 * 60)
             current_ts = current_ts + timedelta(days=jump_days, seconds=jump_seconds)
+            prev_event_type = None
+            current_item = None
 
         if current_ts > user_end:
             current_ts = user_end - timedelta(hours=1)
@@ -215,8 +344,28 @@ async def produce_for_user(
             if current_ts > user_end:
                 current_ts = user_end
 
-            event_type = random.choices(EVENTS, weights=event_distribution, k=1)[0]
-            ev = make_event(user_id, session_id, event_type, ts=event_ts)
+            # --- Markov-выбор с учётом purchase_boost когорты ---
+            if prev_event_type is not None and prev_event_type in MARKOV_TRANSITIONS:
+                weights = list(MARKOV_TRANSITIONS[prev_event_type])
+                # Бустим вероятность purchase (индекс 3) для "покупающих" когорт
+                weights[3] *= cohort.purchase_boost
+                # Нормализуем
+                total = sum(weights)
+                weights = [w / total for w in weights]
+            else:
+                weights = event_distribution
+
+            event_type = random.choices(EVENTS, weights=weights, k=1)[0]
+
+            ev = make_event_contextual(
+                user_id, session_id, event_type,
+                ts=event_ts,
+                current_item=current_item
+            )
+
+            prev_event_type = event_type
+            if event_type in ("product_view", "add_to_cart", "purchase", "click"):
+                current_item = ev["properties"].get("item_id")
 
             async with sem:
                 ok = await post_event(session, url, ev, timeout=timeout)

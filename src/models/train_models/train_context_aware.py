@@ -53,8 +53,8 @@ def main():
     model.save(MODEL_PATH)
 
     # Пример использования
-    print("\n🔮 Example predictions on first 5 test rows:")
-    preds = model.predict(test_df.head(5))
+    print("\n🔮 Example predictions on first 15 test rows:")
+    preds = model.predict(test_df.head(15))
     print(preds)
 
 

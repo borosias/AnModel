@@ -161,7 +161,9 @@ def load_trends(trends_path: str = TRENDS_PATH) -> pd.DataFrame:
 def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataFrame | None = None):
     """
     Оптимизированное построение snapshots.
-    Добавлены Rolling Features (last_7d, last_30d) для лучшего качества модели.
+
+    ВАЖНО: Для обучения НЕ включаем snapshots за последние HORIZON_DAYS дней,
+    т.к. для них нет данных о будущих покупках (таргет будет некорректно = 0).
     """
     logger = _get_logger()
 
@@ -172,8 +174,20 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
         logger.info(f"Тренд‑фичи будут использованы для {len(trends_dict)} дней")
 
     all_dates = sorted(df['date'].unique())
-    total_days = len(all_dates)
-    logger.info(f"Будет создано snapshots на {total_days} дней")
+    max_date = all_dates[-1]
+
+    # --- ИСПРАВЛЕНИЕ: Отсекаем последние HORIZON_DAYS дней для обучения ---
+    # Для этих дней у нас нет данных о будущих покупках
+    cutoff_date = max_date - timedelta(days=horizon_days)
+    train_dates = [d for d in all_dates if d <= cutoff_date]
+
+    logger.info(f"Всего дней в данных: {len(all_dates)} ({all_dates[0]} - {max_date})")
+    logger.info(f"Дней для обучения (с известным будущим): {len(train_dates)} (до {cutoff_date})")
+    logger.info(f"Отсечено последних {horizon_days} дней — для них таргет неизвестен")
+
+    if not train_dates:
+        logger.warning("Нет дат с известным будущим! Увеличьте период данных.")
+        return pd.DataFrame()
 
     has_item = 'item_id' in df.columns
     has_region = 'region' in df.columns
@@ -228,7 +242,10 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
             items_per_day = user_events.dropna(subset=['item_id']).groupby('date')['item_id'].apply(set)
 
         user_active_days = list(per_day_counts.index)
-        start_idx = np.searchsorted(all_dates, user_active_days[0], side='left')
+
+        # Находим первый день юзера в train_dates
+        first_user_day = user_active_days[0]
+        start_idx = np.searchsorted(train_dates, first_user_day, side='left')
 
         # Кумулятивные переменные
         cum = {
@@ -242,7 +259,8 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
         pd_ptr = 0
         n_user_days = len(user_active_days)
 
-        for d in all_dates[start_idx:]:
+        # --- ИЗМЕНЕНИЕ: итерируем только по train_dates (без последних HORIZON_DAYS) ---
+        for d in train_dates[start_idx:]:
             # 1. Обновляем кумулятивные (исторические) данные
             while pd_ptr < n_user_days and user_active_days[pd_ptr] <= d:
                 day = user_active_days[pd_ptr]
@@ -269,15 +287,13 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
             if cum["events"] == 0:
                 continue
 
-            # 2. Рассчитываем ROLLING WINDOWS (Скользящие окна) - Самая важная часть!
-            # Фильтруем события, которые произошли в диапазоне [d - 7 дней, d]
+            # 2. Рассчитываем ROLLING WINDOWS
             mask_7d = (event_dates > d - timedelta(days=7)) & (event_dates <= d)
             mask_30d = (event_dates > d - timedelta(days=30)) & (event_dates <= d)
 
             events_last_7d = np.sum(mask_7d)
             events_last_30d = np.sum(mask_30d)
 
-            # Покупки и траты за 30 дней
             purchases_last_30d = np.sum((event_types[mask_30d] == 'purchase'))
             spent_last_30d = np.sum(event_prices[mask_30d])
 
@@ -286,7 +302,7 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
             days_since_first = (snapshot_datetime - first_ts).days if first_ts else 999
             days_since_last = (snapshot_datetime - last_vals["ts"]).days if last_vals["ts"] else 0
 
-            # 4. Таргет (Will Purchase)
+            # 4. Таргет (Will Purchase) — теперь корректный, т.к. d <= cutoff_date
             will_purchase = 0
             days_to_next = 999
             next_amount = 0.0
@@ -310,15 +326,21 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
                 "total_purchases": int(cum["purchases"]),
                 "total_spent": float(cum["spent"]),
                 "distinct_items": int(len(seen_items)),
-                # Rolling (NEW!)
+                # Rolling
                 "events_last_7d": int(events_last_7d),
                 "events_last_30d": int(events_last_30d),
                 "purchases_last_30d": int(purchases_last_30d),
                 "spent_last_30d": float(spent_last_30d),
-                # Recency / Intensity
+                # Derived
+                "conversion_rate_30d": float(purchases_last_30d / max(1, events_last_30d)),
+                "avg_order_value_30d": float(spent_last_30d / max(1, purchases_last_30d)),
+                "purchase_frequency": float(cum["purchases"] / max(1, cum["days"])),
+                "avg_spend_per_event": float(cum["spent"] / max(1, cum["events"])),
+                # Recency
                 "days_since_first": int(days_since_first),
                 "days_since_last": int(days_since_last),
                 "events_per_day": float(cum["events"] / max(1, cum["days"])),
+                "recency_score": float(1.0 / (1.0 + days_since_last)),
                 # Last Context
                 "last_event_type": last_vals["type"],
                 "last_region": last_vals["region"],
@@ -409,6 +431,27 @@ def main():
     # 2. Строим snapshots
     logger.info("\n2. Построение snapshots...")
     snaps = build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily=trends_daily)
+
+    # --- НОВОЕ: Диагностика качества данных ---
+    if not snaps.empty:
+        logger.info("\n📊 ДИАГНОСТИКА ДАННЫХ:")
+        pos_rate = snaps['will_purchase_next_7d'].mean()
+        logger.info(f"  Positive rate: {pos_rate:.2%}")
+
+        pos_mask = snaps['will_purchase_next_7d'] == 1
+        neg_mask = snaps['will_purchase_next_7d'] == 0
+
+        for col in ['events_last_7d', 'events_last_30d', 'conversion_rate_30d', 'recency_score']:
+            if col in snaps.columns:
+                pos_mean = snaps.loc[pos_mask, col].mean()
+                neg_mean = snaps.loc[neg_mask, col].mean()
+                logger.info(f"  {col}: pos={pos_mean:.3f}, neg={neg_mean:.3f}, diff={pos_mean - neg_mean:.3f}")
+
+        if pos_rate < 0.01:
+            logger.warning("⚠️ Positive rate < 1%! Модель будет предсказывать нули.")
+            logger.warning("   Рекомендация: увеличьте purchase probability в генераторе или сократите span_days.")
+        elif pos_rate < 0.03:
+            logger.warning("⚠️ Positive rate < 3%. Качество модели может быть нестабильным.")
 
     # 3. Сохраняем
     logger.info("\n3. Сохранение...")

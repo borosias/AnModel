@@ -184,7 +184,7 @@ def build_daily_snapshot(df, trends_dict=None):
             "user_id": user_id,
             # Lifetime
             "total_events": int(total_events),
-            "unique_days": int(unique_active_days),  # <--- ДОБАВЬ ЭТУ СТРОКУ!
+            "unique_days": int(unique_active_days),
             "total_clicks": int(total_clicks),
             "total_purchases": int(total_purchases),
             "total_spent": float(total_spent),
@@ -194,10 +194,17 @@ def build_daily_snapshot(df, trends_dict=None):
             "events_last_30d": int(events_last_30d),
             "purchases_last_30d": int(purchases_last_30d),
             "spent_last_30d": float(spent_last_30d),
+            # --- НОВЫЕ DERIVED FEATURES (синхронизация с snapshot_builder1.py) ---
+            "conversion_rate_30d": float(purchases_last_30d / max(1, events_last_30d)),
+            "avg_order_value_30d": float(spent_last_30d / max(1, purchases_last_30d)),
+            "purchase_frequency": float(total_purchases / max(1, unique_active_days)),
+            "avg_spend_per_event": float(total_spent / max(1, total_events)),
             # Recency
             "days_since_first": int(days_since_first),
             "days_since_last": int(days_since_last),
             "events_per_day": float(events_per_day),
+            # --- НОВОЕ: Recency score ---
+            "recency_score": float(1.0 / (1.0 + days_since_last)),
             # Last Context
             "last_event_type": last_row.get('event_type'),
             "last_region": last_row.get('region') if has_region else None,

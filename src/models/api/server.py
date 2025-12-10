@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Models API Server (FastAPI)
 
@@ -26,14 +28,27 @@ if SRC_DIR not in sys.path:
 
 MODELS_DIR = os.path.join(SRC_DIR, "models", "production_models")
 DEFAULT_CONTEXT_AWARE_PATH = os.path.join(MODELS_DIR, "context_aware_model1.pkl")
-SNAPSHOT_PATH = sorted(
-    [os.path.join(SRC_DIR, "analytics", "data", "daily_features", f, "daily_snapshot1.parquet")
-     for f in os.listdir(os.path.join(SRC_DIR, "analytics", "data", "daily_features"))],
-    reverse=True
-)[0]
 
-daily_snapshot = pd.read_parquet(SNAPSHOT_PATH)
-daily_snapshot.set_index("user_id", inplace=True)
+# Безопасная инициализация снапшота: не рушим сервер, если данных/зависимостей нет
+SNAPSHOT_PATH: Optional[str] = None
+try:
+    daily_features_dir = os.path.join(SRC_DIR, "analytics", "data", "daily_features")
+    candidate_paths = []
+    if os.path.isdir(daily_features_dir):
+        for f in os.listdir(daily_features_dir):
+            p = os.path.join(daily_features_dir, f, "daily_snapshot1.parquet")
+            if os.path.isfile(p):
+                candidate_paths.append(p)
+    if candidate_paths:
+        SNAPSHOT_PATH = sorted(candidate_paths, reverse=True)[0]
+        daily_snapshot = pd.read_parquet(SNAPSHOT_PATH)
+        if "user_id" in daily_snapshot.columns:
+            daily_snapshot.set_index("user_id", inplace=True)
+    else:
+        daily_snapshot = pd.DataFrame()
+except Exception as e:
+    print(f"[WARN] Failed to load daily snapshot: {e}")
+    daily_snapshot = pd.DataFrame()
 
 
 # ===== Pydantic-схемы =====
@@ -247,7 +262,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В проде указать конкретные домены
+    # Явно указываем dev-источники, чтобы браузер корректно принимал креды
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
