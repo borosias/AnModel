@@ -81,6 +81,18 @@ export default function Dashboard() {
         }
     }, [selectedService]);
 
+    const normalizePredictions = (result: any) => {
+        if (!result || !Array.isArray(result.predictions)) return result;
+        return {
+            ...result,
+            predictions: result.predictions.map((p: any) => ({
+                ...p,
+                days_to_next_pred:
+                    p.days_to_next_pred === 999 ? 0 : p.days_to_next_pred,
+            })),
+        };
+    };
+
     const fetchModelInfo = async (serviceName: string) => {
         try {
             const modelInfo = await apiClient.modelInfo(serviceName);
@@ -106,6 +118,7 @@ export default function Dashboard() {
 
     const handleLoadUserData = async (user: User) => {
         try {
+            // 1. Формируем правильный объект данных из юзера
             const modelInput = modelFeatures.reduce<Record<string, any>>((acc, feature) => {
                 const value = user.features?.[feature as keyof Features];
 
@@ -115,15 +128,17 @@ export default function Dashboard() {
                     feature === "last_region" ||
                     feature === "snapshot_date"
                 ) {
-                    acc[feature] = value ?? ""; // Строковые поля: если нет значения, ставим пустую строку
+                    acc[feature] = value ?? "";
                 } else {
-                    acc[feature] = typeof value === "number" ? value : 0; // Числовые поля: если нет значения, ставим 0
+                    acc[feature] = typeof value === "number" ? value : 0;
                 }
 
                 return acc;
             }, {});
 
+            // 2. Обновляем UI (асинхронно)
             setInputData(modelInput);
+            setUserId(user.user_id); // Важно: обновляем ID юзера
             setError("");
             setIsLoading(true);
 
@@ -133,6 +148,7 @@ export default function Dashboard() {
                 return;
             }
 
+            // 3. Валидация локальной переменной modelInput (а не стейта)
             const invalidFields = modelFeatures.filter(feature => {
                 const value = modelInput[feature];
                 if (
@@ -141,9 +157,9 @@ export default function Dashboard() {
                     feature === "last_region" ||
                     feature === "snapshot_date"
                 ) {
-                    return value === null || value === undefined; // Строковые поля валидны даже если пустые
+                    return value === null || value === undefined;
                 } else {
-                    return value === undefined || isNaN(Number(value)); // Числовые поля проверяем через Number
+                    return value === undefined || isNaN(Number(value));
                 }
             });
 
@@ -153,16 +169,18 @@ export default function Dashboard() {
                 return;
             }
 
-            const result = await apiClient.predict(selectedService, [modelInput]);
+            // 4. ПРЕДИКТ: Используем modelInput, так как inputData еще не обновился!
+            const rawResult = await apiClient.predict(selectedService, [modelInput]);
+            const result = normalizePredictions(rawResult);
 
             addToHistory({
                 id: Date.now().toString(),
                 timestamp: new Date(),
                 service: selectedService,
-                input: {...modelInput},
+                input: {...modelInput}, // Тут тоже сохраняем именно calculated данные
                 output: result.predictions || [],
                 model: result.model || selectedService,
-                user_id: user.user_id || undefined,
+                user_id: user.user_id,
             });
         } catch (error: any) {
             setError(`Помилка завантаження даних: ${error.message}`);
@@ -170,7 +188,6 @@ export default function Dashboard() {
             setIsLoading(false);
         }
     };
-
 
     const handlePredict = async () => {
         setError("");
@@ -182,9 +199,23 @@ export default function Dashboard() {
             return;
         }
 
-        const invalidFields = modelFeatures.filter(feature =>
-            inputData[feature] === undefined || isNaN(Number(inputData[feature]))
-        );
+        // Корректная валидация: строковые last_* поля не считаем числами
+        const invalidFields = modelFeatures.filter(feature => {
+            const value = inputData[feature];
+
+            if (
+                feature === "last_event_type" ||
+                feature === "last_item" ||
+                feature === "last_region" ||
+                feature === "snapshot_date"
+            ) {
+                // Для строковых полей достаточно, чтобы значение вообще было (может быть пустой строкой)
+                return value === null || value === undefined;
+            }
+
+            // Для числовых полей проверяем, что можно привести к числу
+            return value === undefined || isNaN(Number(value));
+        });
 
         if (invalidFields.length > 0) {
             setError(`Будь ласка, введіть коректні значення для полів: ${invalidFields.join(", ")}`);
@@ -193,7 +224,8 @@ export default function Dashboard() {
         }
 
         try {
-            const result = await apiClient.predict(selectedService, [inputData]);
+            const rawResult = await apiClient.predict(selectedService, [inputData]);
+            const result = normalizePredictions(rawResult);
 
             addToHistory({
                 id: Date.now().toString(),
@@ -213,16 +245,59 @@ export default function Dashboard() {
 
     const handleResetToDefault = () => {
         const defaultData: Record<string, any> = {};
+
         modelFeatures.forEach(feature => {
-            if (feature === "total_events") defaultData[feature] = 100;
-            else if (feature === "total_purchases") defaultData[feature] = 3;
-            else if (feature === "days_since_last_event") defaultData[feature] = 5;
-            else if (feature === "avg_spend_per_purchase_30d") defaultData[feature] = 1200;
-            else defaultData[feature] = 0;
+            switch (feature) {
+                // Основные
+                case "total_events":
+                    defaultData[feature] = 150;
+                    break;
+                case "total_purchases":
+                    defaultData[feature] = 5;
+                    break;
+                case "total_spent":
+                    defaultData[feature] = 5000;
+                    break;
+                case "days_since_last":
+                    defaultData[feature] = 1;
+                    break; // Активный юзер
+                case "days_since_first":
+                    defaultData[feature] = 60;
+                    break;
+
+                // Rolling (Важно для новой модели)
+                case "events_last_7d":
+                    defaultData[feature] = 20;
+                    break;
+                case "events_last_30d":
+                    defaultData[feature] = 50;
+                    break;
+                case "purchases_last_30d":
+                    defaultData[feature] = 1;
+                    break;
+                case "spent_last_30d":
+                    defaultData[feature] = 1000;
+                    break;
+
+                // Тренды
+                case "trend_popularity_mean":
+                    defaultData[feature] = 50;
+                    break;
+
+                // Строковые
+                case "last_event_type":
+                    defaultData[feature] = "click";
+                    break;
+                case "last_region":
+                    defaultData[feature] = "UA-30";
+                    break;
+
+                default:
+                    defaultData[feature] = 0;
+            }
         });
         setInputData(defaultData);
     };
-
     const serviceOptions = services
         ? services.services.map(name => ({
             name,
@@ -250,10 +325,10 @@ export default function Dashboard() {
                 }}
             />
 
-            <Container  sx={{py: 3, width:"100%"}}>
+            <Container sx={{py: 3, width: "100%"}}>
                 <Grid container spacing={3}>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={12} sx={{width:"100%"}}>
+                    <Grid item xs={12} md={12} sx={{width: "100%"}}>
                         <Stack spacing={3}>
                             <ModelSelectionCard
                                 services={serviceOptions}
@@ -268,10 +343,15 @@ export default function Dashboard() {
                                 setInputMode={setInputMode}
                                 modelFeatures={modelFeatures}
                                 inputData={inputData}
-                                onInputChange={(field: any, value: string) => setInputData(prev => ({
-                                    ...prev,
-                                    [field]: parseFloat(value) || 0,
-                                }))}
+                                onInputChange={(field: any, value: string) =>
+                                    setInputData(prev => {
+                                        const isLast = String(field).toLowerCase().startsWith('last');
+                                        return {
+                                            ...prev,
+                                            [field]: isLast ? (value || '') : (parseFloat(value) || 0),
+                                        };
+                                    })
+                                }
                                 onResetToDefault={handleResetToDefault}
                                 users={users}
                                 usersLoading={usersLoading}
@@ -293,7 +373,7 @@ export default function Dashboard() {
                         </Stack>
                     </Grid>
                     {/* @ts-ignore */}
-                    <Grid item xs={12} md={12} sx={{m:"0 auto"}}>
+                    <Grid item xs={12} md={12} sx={{m: "0 auto"}}>
                         <Stack spacing={3}>
                             {hasData ? (
                                 <>

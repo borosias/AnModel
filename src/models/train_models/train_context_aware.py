@@ -2,7 +2,7 @@
 import os
 import pandas as pd
 
-from src.models import ContextAwareModel
+from src.models.models import ContextAwareModel
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT_DIR = os.path.join(BASE_DIR, "..", "..", "analytics", "data", "snapshots", "model1")
