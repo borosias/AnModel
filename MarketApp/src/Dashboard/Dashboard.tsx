@@ -118,6 +118,7 @@ export default function Dashboard() {
 
     const handleLoadUserData = async (user: User) => {
         try {
+            // 1. Формируем правильный объект данных из юзера
             const modelInput = modelFeatures.reduce<Record<string, any>>((acc, feature) => {
                 const value = user.features?.[feature as keyof Features];
 
@@ -127,15 +128,17 @@ export default function Dashboard() {
                     feature === "last_region" ||
                     feature === "snapshot_date"
                 ) {
-                    acc[feature] = value ?? ""; // Строковые поля: если нет значения, ставим пустую строку
+                    acc[feature] = value ?? "";
                 } else {
-                    acc[feature] = typeof value === "number" ? value : 0; // Числовые поля: если нет значения, ставим 0
+                    acc[feature] = typeof value === "number" ? value : 0;
                 }
 
                 return acc;
             }, {});
 
+            // 2. Обновляем UI (асинхронно)
             setInputData(modelInput);
+            setUserId(user.user_id); // Важно: обновляем ID юзера
             setError("");
             setIsLoading(true);
 
@@ -145,6 +148,7 @@ export default function Dashboard() {
                 return;
             }
 
+            // 3. Валидация локальной переменной modelInput (а не стейта)
             const invalidFields = modelFeatures.filter(feature => {
                 const value = modelInput[feature];
                 if (
@@ -153,9 +157,9 @@ export default function Dashboard() {
                     feature === "last_region" ||
                     feature === "snapshot_date"
                 ) {
-                    return value === null || value === undefined; // Строковые поля валидны даже если пустые
+                    return value === null || value === undefined;
                 } else {
-                    return value === undefined || isNaN(Number(value)); // Числовые поля проверяем через Number
+                    return value === undefined || isNaN(Number(value));
                 }
             });
 
@@ -165,17 +169,18 @@ export default function Dashboard() {
                 return;
             }
 
-            const rawResult = await apiClient.predict(selectedService, [inputData]);
+            // 4. ПРЕДИКТ: Используем modelInput, так как inputData еще не обновился!
+            const rawResult = await apiClient.predict(selectedService, [modelInput]);
             const result = normalizePredictions(rawResult);
 
             addToHistory({
                 id: Date.now().toString(),
                 timestamp: new Date(),
                 service: selectedService,
-                input: {...modelInput},
+                input: {...modelInput}, // Тут тоже сохраняем именно calculated данные
                 output: result.predictions || [],
                 model: result.model || selectedService,
-                user_id: user.user_id || undefined,
+                user_id: user.user_id,
             });
         } catch (error: any) {
             setError(`Помилка завантаження даних: ${error.message}`);
@@ -183,7 +188,6 @@ export default function Dashboard() {
             setIsLoading(false);
         }
     };
-
 
     const handlePredict = async () => {
         setError("");
