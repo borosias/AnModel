@@ -1,42 +1,40 @@
+import os
+
 import pandas as pd
 from src.models.models.context_aware import ContextAwareModel
 
 model = ContextAwareModel.load("./src/models/production_models/context_aware_model1.pkl")
 
 # Твои данные
-data = {
-    "total_events": 2000,
-    "unique_days": 216,
-    "total_clicks": 347,
-    "total_purchases": 308,
-    "total_spent": 457636.77,
-    "distinct_items": 92,
-    "events_last_7d": 189,
-    "events_last_30d": 275,
-    "purchases_last_30d": 47,
-    "spent_last_30d": 60909.95,
-    "conversion_rate_30d": 0.171,
-    "avg_order_value_30d": 1295.96,
-    "purchase_frequency": 1.426,
-    "avg_spend_per_event": 228.82,
-    "days_since_first": 353,
-    "days_since_last": 0,
-    "events_per_day": 9.26,
-    "recency_score": 1.0,
-    "last_event_type": "add_to_cart",
-    "last_region": "UA-30",
-    "last_item": "item_2",
-    "trend_popularity_mean": 19.36,
-    "trend_popularity_max": 75
-}
 
-df = pd.DataFrame([data])
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SNAPSHOT_DIR = os.path.join(BASE_DIR, "src", "analytics", "data", "daily_features", "snapshot_2025_12_10")
+
+def load_dataset(name: str) -> pd.DataFrame:
+    path = os.path.join(SNAPSHOT_DIR, f"{name}.parquet")
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    return pd.read_parquet(path)
+
+df = load_dataset("daily_snapshot1")
 print("Input:")
 print(df)
 
 result = model.predict(df)
-print("\nPrediction:")
-print(result)
+out = pd.concat(
+    [
+        df[["user_id", 'total_events', 'unique_days', 'total_clicks', 'total_purchases', 'total_spent', 'distinct_items', 'events_last_7d', 'events_last_30d', 'purchases_last_30d', 'spent_last_30d', 'conversion_rate_30d', 'avg_order_value_30d', 'purchase_frequency', 'avg_spend_per_event', 'days_since_first', 'days_since_last', 'events_per_day', 'recency_score', 'last_event_type', 'last_region', 'last_item', 'trend_popularity_mean', 'trend_popularity_max']
+],
+        result
+    ],
+    axis=1
+)
+
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", 200)
+print(out.sort_values("purchase_proba", ascending=False))
+
 
 # Проверим feature_columns
 print("\nExpected features:")

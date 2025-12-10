@@ -170,18 +170,6 @@ export default function Dashboard() {
             }
 
             // 4. ПРЕДИКТ: Используем modelInput, так как inputData еще не обновился!
-            const rawResult = await apiClient.predict(selectedService, [modelInput]);
-            const result = normalizePredictions(rawResult);
-
-            addToHistory({
-                id: Date.now().toString(),
-                timestamp: new Date(),
-                service: selectedService,
-                input: {...modelInput}, // Тут тоже сохраняем именно calculated данные
-                output: result.predictions || [],
-                model: result.model || selectedService,
-                user_id: user.user_id,
-            });
         } catch (error: any) {
             setError(`Помилка завантаження даних: ${error.message}`);
         } finally {
