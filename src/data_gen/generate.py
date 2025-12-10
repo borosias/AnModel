@@ -36,6 +36,20 @@ class DiversityConfig:
     min_activity_span_days: int = 14
     max_activity_span_days: int = 365
 
+    # --- Snapshot / таргет окно ---
+    snapshot_horizon_days: int = 7  # размер окна, в котором считаем will_purchase_next_7d
+    snapshot_date: datetime | None = None  # если None, берём текущий момент
+
+    # --- Promo windows (Variant A) ---
+    promo_share: float = 0.2              # доля пользователей с промо-активацией
+    promo_window_days: int = 10           # длина окна промо перед snapshot
+    promo_purchase_boost: float = 2.5     # усиление вероятности purchase в промо-окне
+    promo_max_session_gap_days: int = 1   # максимум дней между сессиями в промо-окне
+
+    # --- Snapshot-aware bursts (Variant B) ---
+    burst_share: float = 0.25             # доля пользователей с целенаправленной цепочкой в последние дни
+    burst_force_purchase_prob: float = 0.8  # вероятность завершить цепочку покупкой
+
     # --- Интервалы между сессиями ---
     min_days_between_sessions: int = 0
     max_days_between_sessions: int = 5
@@ -93,6 +107,9 @@ USER_COHORTS = {
 }
 
 COHORT_DISTRIBUTION = ["heavy", "medium", "medium", "light", "light", "light", "one_time"]
+
+def is_flag_user(user_id: str, seed: int, ratio: float, salt: str) -> bool:
+    return (hash((user_id, seed, salt)) % 1000) < int(ratio * 1000)
 
 
 def get_user_cohort(user_id: str, seed: int = 42) -> UserCohort:
@@ -274,6 +291,14 @@ async def produce_for_user(
     # --- НОВОЕ: Получаем когорту пользователя ---
     cohort = get_user_cohort(user_id)
 
+
+    if cohort.name == "one_time":
+        is_promo_user = False
+        is_burst_user = False
+    else:
+        is_promo_user = is_flag_user(user_id, 42, diversity.promo_share, "promo")
+        is_burst_user = is_flag_user(user_id, 42, diversity.burst_share, "burst")
+
     # --- 1. Индивидуальная интенсивность (с учётом когорты) ---
     activity_factor = random.lognormvariate(
         mu=diversity.activity_mu,
@@ -285,7 +310,8 @@ async def produce_for_user(
     target_events = min(target_events, int(events_per_user * diversity.max_events_multiplier))
 
     # --- 2. Временное окно активности (с учётом когорты) ---
-    now = datetime.now(timezone.utc)
+    # Привязываем генерацию к дате снапшота (если задана)
+    now = diversity.snapshot_date or datetime.now(timezone.utc)
     year_ago = now - timedelta(days=365)
 
     # ИСПРАВЛЕНО: безопасное вычисление span_days
@@ -303,12 +329,20 @@ async def produce_for_user(
         user_start = year_ago
     user_end = min(user_start + timedelta(days=span_days), now)
 
+    if user_end < now - timedelta(days=diversity.snapshot_horizon_days):
+        return
+
+    # Границы таргет-окна (например, последние 7 дней перед snapshot)
+    target_window_start = now - timedelta(days=diversity.snapshot_horizon_days)
+    promo_window_start = now - timedelta(days=diversity.promo_window_days)
+
     current_ts = user_start
 
     prev_event_type = None
     current_item = None
 
     # --- 3. Генерация сессий и событий ---
+    has_purchase_last_window = False
     i = 0
     while i < target_events:
         remaining = target_events - i
@@ -325,6 +359,9 @@ async def produce_for_user(
                 diversity.max_days_between_sessions
             )
             jump_seconds = random.randint(0, 6 * 60 * 60)
+            # В промо-окне уменьшаем разрыв между сессиями
+            if is_promo_user and current_ts >= promo_window_start:
+                jump_days = min(jump_days, diversity.promo_max_session_gap_days)
             current_ts = current_ts + timedelta(days=jump_days, seconds=jump_seconds)
             prev_event_type = None
             current_item = None
@@ -349,13 +386,23 @@ async def produce_for_user(
                 weights = list(MARKOV_TRANSITIONS[prev_event_type])
                 # Бустим вероятность purchase (индекс 3) для "покупающих" когорт
                 weights[3] *= cohort.purchase_boost
+                # Дополнительный буст в промо-окне
+                if is_promo_user and current_ts >= promo_window_start:
+                    weights[3] *= diversity.promo_purchase_boost
                 # Нормализуем
                 total = sum(weights)
                 weights = [w / total for w in weights]
             else:
-                weights = event_distribution
+                weights = list(event_distribution)
+                if is_promo_user and current_ts >= promo_window_start:
+                    weights[3] *= diversity.promo_purchase_boost
+                    total = sum(weights)
+                    weights = [w / total for w in weights]
 
             event_type = random.choices(EVENTS, weights=weights, k=1)[0]
+
+            if event_type == "purchase" and prev_event_type not in ("add_to_cart",):
+                continue
 
             ev = make_event_contextual(
                 user_id, session_id, event_type,
@@ -375,12 +422,121 @@ async def produce_for_user(
                 else:
                     counters["err"] += 1
 
+            # Фиксируем покупки в целевом окне
+            if event_type == "purchase" and target_window_start <= event_ts <= now:
+                has_purchase_last_window = True
+
             i += 1
             if i >= target_events:
                 break
 
             if delay_between_events > 0:
                 await asyncio.sleep(delay_between_events)
+
+    # --- 4A. Promo window: дополнительная активность перед snapshot ---
+    if is_promo_user:
+        promo_start = max(user_start, now - timedelta(days=diversity.promo_window_days))
+        # Кол-во дополнительных сессий в промо-окно
+        extra_sessions = random.randint(1, 3)
+        for _ in range(extra_sessions):
+            session_id = str(uuid.uuid4())
+            # Впишем сессию в промо-диапазон
+            base_ts = promo_start + timedelta(
+                days=random.uniform(0, max(0.1, (now - promo_start).days)),
+                seconds=random.randint(0, 12 * 60 * 60)
+            )
+            # Укороченные интервалы между событиями создают плотность
+            session_len = random.randint(3, 8)
+            prev_event_type = None
+            current_item = None
+            current_ts = base_ts
+            for _j in range(session_len):
+                # Сильнее бустим purchase в промо
+                if prev_event_type is not None and prev_event_type in MARKOV_TRANSITIONS:
+                    weights = list(MARKOV_TRANSITIONS[prev_event_type])
+                    weights[3] *= (cohort.purchase_boost * diversity.promo_purchase_boost)
+                    tw = sum(weights)
+                    weights = [w / tw for w in weights]
+                else:
+                    base_w = list(event_distribution)
+                    base_w[3] *= diversity.promo_purchase_boost
+                    tw = sum(base_w)
+                    weights = [w / tw for w in base_w]
+
+                event_type = random.choices(EVENTS, weights=weights, k=1)[0]
+
+                if event_type == "purchase" and prev_event_type not in ("add_to_cart",):
+                    continue
+
+                # Более плотные события в рамках часа
+                delta_sec = random.randint(
+                    max(5, diversity.min_seconds_between_events // 2),
+                    max(30, diversity.min_seconds_between_events)
+                )
+                current_ts = min(now, current_ts + timedelta(seconds=delta_sec))
+
+                ev = make_event_contextual(
+                    user_id, session_id, event_type,
+                    ts=current_ts,
+                    current_item=current_item
+                )
+                if event_type in ("product_view", "add_to_cart", "purchase", "click"):
+                    current_item = ev["properties"].get("item_id")
+
+                async with sem:
+                    ok = await post_event(session, url, ev, timeout=timeout)
+                    counters["sent"] += 1
+                    if ok:
+                        counters["ok"] += 1
+                    else:
+                        counters["err"] += 1
+
+                if event_type == "purchase" and target_window_start <= current_ts <= now:
+                    has_purchase_last_window = True
+
+                if delay_between_events > 0:
+                    await asyncio.sleep(delay_between_events)
+
+    # --- 4B. Snapshot-aware burst: намеренная цепочка в последние дни ---
+    if is_burst_user and (not has_purchase_last_window):
+        session_id = str(uuid.uuid4())
+        base_ts = (
+            max(user_start, now - timedelta(days=diversity.snapshot_horizon_days))
+            + timedelta(
+                days=random.uniform(0, diversity.snapshot_horizon_days),
+                seconds=random.randint(0, 6 * 60 * 60)
+            )
+        )
+        current_ts = base_ts
+        # Сценарий разогрева
+        chain = ["search", "product_view", "product_view", "add_to_cart"]
+        for idx, et in enumerate(chain):
+            current_ts = min(now, current_ts + timedelta(seconds=random.randint(15, 90)))
+            ev = make_event_contextual(user_id, session_id, et, ts=current_ts)
+            async with sem:
+                ok = await post_event(session, url, ev, timeout=timeout)
+                counters["sent"] += 1
+                if ok:
+                    counters["ok"] += 1
+                else:
+                    counters["err"] += 1
+            if delay_between_events > 0:
+                await asyncio.sleep(delay_between_events)
+
+        # Завершим покупкой с высокой вероятностью
+        if random.random() < diversity.burst_force_purchase_prob and current_ts < now:
+            current_ts = min(now, current_ts + timedelta(seconds=random.randint(10, 60)))
+            ev = make_event_contextual(user_id, session_id, "purchase", ts=current_ts)
+            async with sem:
+                ok = await post_event(session, url, ev, timeout=timeout)
+                counters["sent"] += 1
+                if ok:
+                    counters["ok"] += 1
+                else:
+                    counters["err"] += 1
+            if target_window_start <= current_ts <= now:
+                has_purchase_last_window = True
+
     return
 
 
@@ -464,20 +620,69 @@ def parse_args():
     p.add_argument("--max-session-gap-days", type=int, default=5,
                    help="Max days between sessions")
 
+    # --- Snapshot / promo / bursts ---
+    p.add_argument("--snapshot-horizon-days", type=int, default=7,
+                   help="Target window size in days before snapshot")
+    p.add_argument("--snapshot-date", type=str, default="",
+                   help="ISO datetime for snapshot (UTC). If empty, use now.")
+
+    p.add_argument("--promo-share", type=float, default=0.2,
+                   help="Share of users to activate promo window near snapshot [0..1]")
+    p.add_argument("--promo-window-days", type=int, default=10,
+                   help="Promo window length before snapshot in days")
+    p.add_argument("--promo-purchase-boost", type=float, default=2.5,
+                   help="Purchase probability boost multiplier within promo window")
+    p.add_argument("--promo-max-session-gap-days", type=int, default=1,
+                   help="Max days between sessions within promo window")
+
+    p.add_argument("--burst-share", type=float, default=0.25,
+                   help="Share of users to receive a snapshot-aware intent chain")
+    p.add_argument("--burst-force-purchase-prob", type=float, default=0.8,
+                   help="Probability to finish intent chain with purchase")
+
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
+    # Parse snapshot date
+    snap_dt = None
+    if args.snapshot_date:
+        try:
+            # Try full ISO first
+            snap_dt = datetime.fromisoformat(args.snapshot_date)
+            if snap_dt.tzinfo is None:
+                snap_dt = snap_dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            try:
+                # Try YYYY-MM-DD
+                snap_dt = datetime.strptime(args.snapshot_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except Exception:
+                logger.warning(f"Cannot parse --snapshot-date={args.snapshot_date}, using now()")
+                snap_dt = None
+
     diversity = DiversityConfig(
         activity_sigma=args.activity_sigma,
         min_activity_span_days=args.min_span_days,
         max_activity_span_days=args.max_span_days,
         max_days_between_sessions=args.max_session_gap_days,
+        snapshot_horizon_days=args.snapshot_horizon_days,
+        snapshot_date=snap_dt,
+        promo_share=args.promo_share,
+        promo_window_days=args.promo_window_days,
+        promo_purchase_boost=args.promo_purchase_boost,
+        promo_max_session_gap_days=args.promo_max_session_gap_days,
+        burst_share=args.burst_share,
+        burst_force_purchase_prob=args.burst_force_purchase_prob,
     )
 
-    logger.info(f"Starting generator: events_per_user={args.events_per_user} concurrency={args.concurrency}")
+    logger.info(
+        "Starting generator: events_per_user=%s concurrency=%s snapshot_horizon=%sd snapshot_date=%s promo_share=%.2f burst_share=%.2f",
+        args.events_per_user, args.concurrency, args.snapshot_horizon_days,
+        (diversity.snapshot_date.isoformat() if diversity.snapshot_date else "now"),
+        diversity.promo_share, diversity.burst_share,
+    )
     asyncio.run(run_generation(
         args.url,
         args.events_per_user,
