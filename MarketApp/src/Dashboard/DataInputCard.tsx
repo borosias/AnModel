@@ -24,6 +24,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import type {User, InputMode} from '../types';
 import {ManualInput} from './ManualInput';
 import {UserSearch} from './UserSearch';
+import {UserInsights} from './UserInsights';
 
 interface DataInputCardProps {
     inputMode: InputMode;
@@ -142,13 +143,20 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                     </Tabs>
 
                     {inputMode === 'db' ? (
-                        <UserSearch
-                            users={users}
-                            usersLoading={usersLoading}
-                            onSelectUserData={onSelectUserData}
-                            userId={userId}
-                            setUserId={setUserId}
-                        />
+                        <>
+                            <UserSearch
+                                users={users}
+                                usersLoading={usersLoading}
+                                onSelectUserData={onSelectUserData}
+                                userId={userId}
+                                setUserId={setUserId}
+                            />
+
+                            {/* Картка з ключовими факторами для вибраного користувача */}
+                            {userId && (
+                                <UserInsights user={users.find(u => u.user_id === userId)}/>
+                            )}
+                        </>
                     ) : (
                         <ManualInput
                             modelFeatures={modelFeatures}
