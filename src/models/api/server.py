@@ -50,6 +50,25 @@ except Exception as e:
     print(f"[WARN] Failed to load daily snapshot: {e}")
     daily_snapshot = pd.DataFrame()
 
+# Предвычисленные предсказания модели для всех пользователей снапшота
+predicted_users = pd.DataFrame()
+try:
+    if not daily_snapshot.empty and os.path.exists(DEFAULT_CONTEXT_AWARE_PATH):
+        # Импортируем модель и считаем предсказания батчем
+        from models.models.context_aware import ContextAwareModel  # type: ignore
+
+        context_model = ContextAwareModel.load(DEFAULT_CONTEXT_AWARE_PATH)
+        # daily_snapshot сейчас с индексом user_id, вернём столбец user_id для join
+        ds_with_id = daily_snapshot.reset_index(drop=False)
+        preds_df = context_model.predict(ds_with_id)
+        predicted_users = ds_with_id.join(preds_df)
+        predicted_users.set_index("user_id", inplace=True)
+        print(f"[INFO] Precomputed predictions for {len(predicted_users)} users from snapshot")
+    else:
+        print("[INFO] No daily snapshot or model file for precomputed predictions")
+except Exception as e:
+    print(f"[WARN] Failed to precompute predictions: {e}")
+    predicted_users = pd.DataFrame()
 
 # ===== Pydantic-схемы =====
 class PredictRequest(BaseModel):
@@ -396,6 +415,19 @@ async def predict_by_service(service_name: str, request: PredictRequest):
 
 @app.get("/users", tags=["Users"])
 async def search_users():
+    # Если есть предвычисленные предсказания — используем их
+    if not predicted_users.empty:
+        users_sorted = predicted_users.sort_values("purchase_proba", ascending=False, na_position="last")
+        results = []
+        for user_id, row in users_sorted.iterrows():
+            features = row.to_dict()
+            results.append({
+                "user_id": str(user_id),
+                "features": features
+            })
+        return {"users": results}
+
+    # Fallback: старое поведение, если по какой-то причине нет снапшота/модели
     try:
         df = pd.read_parquet("../../analytics/data/users/users.parquet")
         df = df.sort_values("user_uid")
@@ -423,7 +455,7 @@ async def search_users():
     for user_id in user_ids:
         features = (
             daily_snapshot.loc[user_id].to_dict()
-            if user_id in daily_snapshot.index
+            if (not daily_snapshot.empty and user_id in daily_snapshot.index)
             else {}
         )
 

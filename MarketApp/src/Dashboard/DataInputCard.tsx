@@ -152,8 +152,7 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                                 setUserId={setUserId}
                             />
 
-                            {/* Картка з ключовими факторами для вибраного користувача */}
-                            {userId && (
+                            {userId && selectedService && !usersLoading && (
                                 <UserInsights user={users.find(u => u.user_id === userId)}/>
                             )}
                         </>
