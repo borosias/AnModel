@@ -4,6 +4,12 @@ import os
 from datetime import datetime, timedelta
 
 import numpy as np
+
+# Bring in micro‑trend and sequence modules to enrich daily snapshots with
+# behavioural and temporal context.  Importing at module scope avoids
+# repeatedly creating instances inside the tight user loop.
+from src.models.models.micro_trend import MicroTrend
+from src.models.models.sequence_model import SequenceModel
 import pandas as pd
 
 EVENTS_DIR = "../data/parquet"
@@ -124,6 +130,15 @@ def build_daily_snapshot(df, trends_dict=None):
     users = df['user_id'].unique()
     snapshots = []
 
+    # Initialise micro‑trend calculator and sequence model once per build.
+    micro_calc = MicroTrend()
+    seq_model = SequenceModel()
+    # Fit sequence model on the observed event types.  If none are present
+    # the model remains unfitted and will return zero vectors on encoding.
+    if 'event_type' in df.columns:
+        unique_types = df['event_type'].dropna().astype(str).unique().tolist()
+        seq_model.fit(unique_types)
+
     for idx, user_id in enumerate(users, start=1):
         # Берем всю историю пользователя
         user_events = df[df['user_id'] == user_id].sort_values('ts')
@@ -211,9 +226,39 @@ def build_daily_snapshot(df, trends_dict=None):
             "last_item": last_row.get('item_id') if has_item else None,
         }
 
+        # 5. Micro‑trend features: compute recent vs baseline behaviour
+        try:
+            # Use ``history['date']`` for day‑level calculations.  Prices are
+            # optional; pass None if the price column is absent.
+            event_dates_arr = history['date'].values
+            event_types_arr = history['event_type'].astype(str).values
+            event_prices_arr = history['price'].values if 'price' in history.columns else None
+            micro_feats = micro_calc.compute(
+                event_dates_arr,
+                event_types_arr,
+                event_prices_arr,
+                target_date,
+            )
+            row.update(micro_feats)
+        except Exception as ex:
+            logger.warning(f"Micro‑trend calculation failed for user {user_id}: {ex}")
+
+        # 6. Sequence embedding features: encode distribution of recent events
+        try:
+            # Encode using timestamp series.  Convert both timestamps and
+            # snapshot date to numpy datetime64 for comparison.
+            ts_np = history['ts'].values.astype('datetime64[ns]')
+            snapshot_np = np.datetime64(target_ts.to_pydatetime())
+            seq_emb = seq_model.encode_history(event_types_arr, ts_np, snapshot_np)
+            for e_idx, val in enumerate(seq_emb):
+                row[f"seq_emb_{e_idx}"] = float(val)
+        except Exception as ex:
+            logger.warning(f"Sequence embedding failed for user {user_id}: {ex}")
+
         if trends_dict:
             t = trends_dict.get(target_date)
-            if t: row.update(t)
+            if t:
+                row.update(t)
 
         snapshots.append(row)
         _print_progress(idx, len(users), prefix="Daily Snapshot")

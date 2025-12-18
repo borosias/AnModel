@@ -6,6 +6,11 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+# Import the micro‑trend and sequence modules.  These imports are placed at
+# module level to avoid repeated initialisation inside tight loops.
+from src.models.models.micro_trend import MicroTrend
+from src.models.models.sequence_model import SequenceModel
+
 EVENTS_DIR = "../data/parquet"
 OUT_DIR = "../data/snapshots/model1"
 HORIZON_DAYS = 7
@@ -168,10 +173,25 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
     logger = _get_logger()
 
     # Подготовка трендов
-    trends_dict = {}
+    trends_dict: dict = {}
     if trends_daily is not None and not trends_daily.empty:
         trends_dict = trends_daily.to_dict(orient="index")
         logger.info(f"Тренд‑фичи будут использованы для {len(trends_dict)} дней")
+
+    # Initialise micro‑trend calculator and sequence model once per build.  The
+    # sequence model needs to learn the mapping of event types before it can
+    # encode histories.  We derive the mapping from the full set of event
+    # types present in the dataset.
+    micro_calc = MicroTrend()
+    seq_model = SequenceModel()
+    # Fit the sequence model on all unique event types.  The stable order of
+    # unique types ensures consistent column ordering across snapshots.
+    if 'event_type' in df.columns:
+        unique_types = df['event_type'].dropna().astype(str).unique().tolist()
+        seq_model.fit(unique_types)
+    else:
+        # If no event types, leave model unfitted; encoding will return zeros.
+        unique_types = []
 
     all_dates = sorted(df['date'].unique())
     max_date = all_dates[-1]
@@ -351,9 +371,42 @@ def build_snapshots_simple(df, horizon_days=HORIZON_DAYS, trends_daily: pd.DataF
                 "next_purchase_amount": float(next_amount),
             }
 
+            # 5. Micro‑trend features
+            try:
+                # Use the user's per‑event arrays for micro‑trend calculations.  Note
+                # that ``event_dates`` comes from the date column (not ts) so that
+                # day‑level windows match snapshot boundaries.  ``event_prices`` is
+                # optional and may be ``None`` if the price column is absent.
+                event_dates_arr = event_dates  # np.ndarray of ``date`` values
+                event_prices_arr = event_prices if 'price' in user_events.columns else None
+                micro_feats = micro_calc.compute(
+                    event_dates_arr, event_types, event_prices_arr, d
+                )
+                row.update(micro_feats)
+            except Exception as ex:
+                # In case of any unexpected error during micro feature calculation
+                logger.warning(f"Micro‑trend calculation failed for user {user_id} on {d}: {ex}")
+
+            # 6. Sequence embedding features
+            try:
+                # Encode the user’s history up to the snapshot as a distribution over
+                # event types.  Convert the timestamp series to numpy datetime64 for
+                # comparison.  ``snapshot_datetime`` is converted to datetime64
+                # automatically by numpy.
+                ts_np = user_events['ts'].values.astype('datetime64[ns]')
+                snapshot_np = np.datetime64(snapshot_datetime.to_pydatetime())
+                seq_emb = seq_model.encode_history(event_types.astype(str), ts_np, snapshot_np)
+                # Expand the embedding into named columns.  Use a prefix that makes
+                # it clear these are sequential features.
+                for idx, val in enumerate(seq_emb):
+                    row[f"seq_emb_{idx}"] = float(val)
+            except Exception as ex:
+                logger.warning(f"Sequence embedding failed for user {user_id} on {d}: {ex}")
+
             if trends_dict:
                 t = trends_dict.get(d)
-                if t: row.update(t)
+                if t:
+                    row.update(t)
 
             snapshots.append(row)
 
