@@ -15,6 +15,8 @@ import AttachMoneyIcon from '@mui/icons-material/AttachMoney'; // Заменил
 import TimelineIcon from '@mui/icons-material/Timeline';
 import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Для временных показателей
 import PercentIcon from '@mui/icons-material/Percent';
+import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 // Для конверсии
 import CalculateIcon from '@mui/icons-material/Calculate'; // Для средней частоты
 import type {User} from '../types';
@@ -184,6 +186,12 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
     const borderColor = willPurchasePred === 1 ? theme.palette.success.main :
         segment.color === 'error' ? theme.palette.error.main :
             theme.palette.divider;
+
+    // Мікро-тренди: розрахунки показників за останні 3 дні відносно 7 днів
+    const microEventGrowth = Number(f.micro_event_growth ?? NaN);
+    const microPurchaseGrowth = Number(f.micro_purchase_growth ?? NaN);
+    const microPurchaseRatio = Number(f.micro_purchase_ratio ?? NaN);
+    const microSpentGrowth = Number(f.micro_spent_growth ?? NaN);
 
     return (
         <Paper
@@ -360,6 +368,38 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                         </Typography>
                     </Box>
                 </Box>
+
+                {/* Мікро-тренди */}
+                <Divider />
+                <Typography variant="subtitle2" fontWeight={700}>
+                    📊 Мікро-тренди (останні 3 дні)
+                </Typography>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+                    <MetricBox
+                        icon={<TrendingUpIcon color="primary" fontSize="small" />}
+                        title="Приріст подій"
+                        value={isNaN(microEventGrowth) ? '—' : `${(microEventGrowth * 100).toFixed(0)}%`}
+                        tooltip="Відношення кількості подій за останні 3 дні до середнього за останні 7 днів. >100% означає зростання активності."
+                    />
+                    <MetricBox
+                        icon={<ShoppingCartIcon color="secondary" fontSize="small" />}
+                        title="Приріст покупок"
+                        value={isNaN(microPurchaseGrowth) ? '—' : `${(microPurchaseGrowth * 100).toFixed(0)}%`}
+                        tooltip="Відношення кількості покупок за останні 3 дні до середнього за останні 7 днів. >100% означає зростання покупок."
+                    />
+                    <MetricBox
+                        icon={<PercentIcon color="info" fontSize="small" />}
+                        title="Конверсія 3д"
+                        value={isNaN(microPurchaseRatio) ? '—' : `${(microPurchaseRatio * 100).toFixed(1)}%`}
+                        tooltip="Частка покупок серед всіх дій за останні 3 дні."
+                    />
+                    <MetricBox
+                        icon={<AttachMoneyIcon color="success" fontSize="small" />}
+                        title="Приріст витрат"
+                        value={isNaN(microSpentGrowth) ? '—' : `${(microSpentGrowth * 100).toFixed(0)}%`}
+                        tooltip="Відношення суми витрат за останні 3 дні до середнього за останні 7 днів. >100% означає зростання витрат."
+                    />
+                </Stack>
 
                 <Typography variant="caption" color="text.secondary" sx={{mt: 1, display: 'block'}}>
                     **Пояснення статусів:**

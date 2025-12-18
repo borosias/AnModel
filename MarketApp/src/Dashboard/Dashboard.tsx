@@ -81,6 +81,15 @@ export default function Dashboard() {
         }
     }, [selectedService]);
 
+    // Automatically select the only available service. When there is exactly one model
+    // available from the backend, this effect assigns it to the selectedService state.
+    useEffect(() => {
+        if (!servicesLoading && services && services.services?.length === 1 && !selectedService) {
+            const firstService = services.services[0];
+            setSelectedService(firstService);
+        }
+    }, [services, servicesLoading, selectedService]);
+
     const normalizePredictions = (result: any) => {
         if (!result || !Array.isArray(result.predictions)) return result;
         return {

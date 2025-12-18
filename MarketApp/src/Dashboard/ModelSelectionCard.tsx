@@ -42,6 +42,86 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
   modelFeatures,
 }) => {
   const theme = useTheme();
+  // If there is only one available service, display static model info instead of a selectable dropdown.
+  if (services.length <= 1) {
+    const only = services[0];
+    return (
+      <Card
+        elevation={0}
+        sx={{
+          borderRadius: 3,
+          border: `1px solid ${alpha(theme.palette.primary.main, 0.1)}`,
+          background: "white",
+          overflow: "hidden",
+          position: "relative",
+          '&:before': {
+            content: '""',
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 4,
+            background: `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
+          },
+        }}
+      >
+        <CardContent>
+          <Stack spacing={2.5}>
+            <Stack direction="row" alignItems="center" spacing={1.5}>
+              <Avatar
+                sx={{
+                  bgcolor: alpha(theme.palette.primary.main, 0.1),
+                  color: theme.palette.primary.main,
+                }}
+              >
+                <TrendingUpIcon />
+              </Avatar>
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 700, color: "text.primary" }}>
+                  Модель AI
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Використовується єдина доступна модель
+                </Typography>
+              </Box>
+            </Stack>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography variant="body1" fontWeight={600}>
+                {only?.name}
+              </Typography>
+              {only?.detail && (
+                <StatusIcon status={only.detail.status} />
+              )}
+              <Typography variant="caption" color="text.secondary">
+                {only?.detail?.features?.length || 0} характеристик
+              </Typography>
+            </Stack>
+            {only && modelFeatures.length > 0 && (
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                  bgcolor: alpha(theme.palette.info.light, 0.05),
+                  borderColor: alpha(theme.palette.info.main, 0.2),
+                }}
+              >
+                <Stack direction="row" spacing={1} alignItems="center" mb={1}>
+                  <InfoIcon color="info" fontSize="small" />
+                  <Typography variant="subtitle2" color="info.main">
+                    Активна модель: {only.name}
+                  </Typography>
+                </Stack>
+                <Typography variant="body2" color="text.secondary">
+                  <strong>Характеристики:</strong> {modelFeatures.map(f => TRANSLATIONS[f] || f).join(", ")}
+                </Typography>
+              </Paper>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card
@@ -60,7 +140,7 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
           right: 0,
           height: 4,
           background: `linear-gradient(90deg, ${theme.palette.primary.main}, ${theme.palette.secondary.main})`,
-        }
+        },
       }}
     >
       <CardContent>
