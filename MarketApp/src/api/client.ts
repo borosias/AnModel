@@ -11,13 +11,13 @@ export const apiClient = {
 
   services: async (): Promise<ServicesResponse> => {
     const response = await fetch(`${API_BASE}/services`);
-    if (!response.ok) throw new Error("Не вдалося отримати список сервісів");
+    if (!response.ok) throw new Error("Failed to get list of services");
     return response.json();
   },
 
   modelInfo: async (serviceName: string): Promise<ModelInfo> => {
     const response = await fetch(`${API_BASE}/model-info/${serviceName}`);
-    if (!response.ok) throw new Error("Не вдалося завантажити інформацію про модель");
+    if (!response.ok) throw new Error("Failed to load model information");
     return response.json();
   },
 
@@ -25,7 +25,7 @@ export const apiClient = {
     const response = await fetch(
       `${API_BASE}/users`
     );
-    if (!response.ok) throw new Error("Не вдалося завантажити користувачів");
+    if (!response.ok) throw new Error("Failed to load users");
     return response.json();
   },
 
@@ -42,7 +42,7 @@ export const apiClient = {
       throw new Error(
         errorData.detail ||
         errorData.error ||
-        `Помилка сервера: ${response.status}`
+        `Server error: ${response.status}`
       );
     }
 

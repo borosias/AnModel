@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 class QuantileLoss(nn.Module):
-    """Pinball loss для quantile regression"""
+    """Pinball loss for quantile regression"""
 
     def __init__(self, quantiles=[0.05, 0.5, 0.95]):
         super().__init__()

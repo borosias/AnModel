@@ -33,7 +33,7 @@ export const Footer: React.FC<FooterProps> = ({ servicesCount = 0 }) => {
               API: {import.meta.env.VITE_API_BASE || "http://localhost:8000"}
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              Моделей: {servicesCount}
+              Models: {servicesCount}
             </Typography>
           </Stack>
         </Stack>

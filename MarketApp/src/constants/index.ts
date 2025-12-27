@@ -1,29 +1,29 @@
 export const TRANSLATIONS: Record<string, string> = {
-    total_events: "Кількість подій",
-    total_purchases: "Кількість покупок",
-    days_since_last_event: "Днів з останньої активності",
-    purchase_proba: "Ймовірність покупки",
-    will_purchase_pred: "Прогноз покупки",
-    days_to_next_pred: "Дні до наступної покупки",
-    next_purchase_amount_pred: "Сума наступної покупки",
-    churn_probability: "Риск відтоку",
-    lifetime_value: "Життєва цінність клієнта",
-    engagement_score: "Рівень залучення",
-    avg_spend_per_purchase_30d: "Середній чек (30 днів)",
-    events_per_day: "Подій на день",
-    events_last_7d: "Активність (7 днів)",
-    events_last_30d: "Активність (30 днів)",
-    purchases_last_30d: "Купівлі (30 днів)",
-    spent_last_30d: "Витрати (30 днів)",
-    distinct_items: "Унікальних товарів",
-    total_spent: "Загальна сума витрат",
-    loaded: "Активна",
-    error: "Помилка",
-    pending: "Очікування",
-    predictions: "Прогнози",
-    records: "Записи",
-    model: "Модель",
-    features: "Характеристики",
+    total_events: "Event Count",
+    total_purchases: "Purchase Count",
+    days_since_last_event: "Days Since Last Activity",
+    purchase_proba: "Purchase Probability",
+    will_purchase_pred: "Purchase Prediction",
+    days_to_next_pred: "Days to Next Purchase",
+    next_purchase_amount_pred: "Next Purchase Amount",
+    churn_probability: "Churn Probability",
+    lifetime_value: "Customer Lifetime Value",
+    engagement_score: "Engagement Level",
+    avg_spend_per_purchase_30d: "Average Check (30 days)",
+    events_per_day: "Events per Day",
+    events_last_7d: "Activity (7 days)",
+    events_last_30d: "Activity (30 days)",
+    purchases_last_30d: "Purchases (30 days)",
+    spent_last_30d: "Spending (30 days)",
+    distinct_items: "Unique Items",
+    total_spent: "Total Spending",
+    loaded: "Active",
+    error: "Error",
+    pending: "Pending",
+    predictions: "Predictions",
+    records: "Records",
+    model: "Model",
+    features: "Features",
 };
 
 export const formatFeatureValue = (key: string, value: number) => {
@@ -44,7 +44,7 @@ export const formatFeatureValue = (key: string, value: number) => {
 
         case TRANSLATIONS.will_purchase_pred:
         case "will_purchase_pred":
-            return value === 1 ? "Буде" : "Не Буде";
+            return value === 1 ? "Will Purchase" : "Will Not Purchase";
 
         default:
             if (Number.isInteger(value)) return value.toString();

@@ -10,7 +10,7 @@ warnings.filterwarnings('ignore')
 
 
 class BayesianCalibrator:
-    """Bayesian калибровка вероятностей с Beta распределением"""
+    """Bayesian probability calibration with Beta distribution"""
 
     def __init__(self, alpha_prior=1, beta_prior=1):
         self.alpha_prior = alpha_prior
@@ -18,7 +18,7 @@ class BayesianCalibrator:
         self.fitted = False
 
     def fit(self, y_true, y_pred):
-        """Обучает Beta распределение на калиброванных вероятностях"""
+        """Trains Beta distribution on calibrated probabilities"""
         y_true = np.array(y_true).flatten()
         y_pred = np.array(y_pred).flatten()
 
@@ -87,7 +87,7 @@ class BayesianCalibrator:
         return self
 
     def calibrate(self, y_pred):
-        """Калибрует предсказанные вероятности"""
+        """Calibrates predicted probabilities"""
         if not self.fitted:
             return y_pred
 
@@ -100,7 +100,7 @@ class BayesianCalibrator:
         return np.clip(calibrated, 1e-10, 1 - 1e-10)
 
     def confidence_interval(self, y_pred, confidence=0.9) -> Tuple[np.ndarray, np.ndarray]:
-        """Возвращает Bayesian credible intervals"""
+        """Returns Bayesian credible intervals"""
         if not self.fitted:
             return y_pred - 0.1, y_pred + 0.1
 

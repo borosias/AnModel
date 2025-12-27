@@ -52,7 +52,7 @@ export const Header: React.FC<HeaderProps> = ({ health, healthLoading, onRefresh
               Marketing Predictions AI
             </Typography>
             <Typography variant="caption" sx={{ color: alpha(theme.palette.common.white, 0.8) }}>
-              Система прогнозування маркетингових показників
+              Marketing Metrics Prediction System
             </Typography>
           </Box>
         </Stack>
@@ -60,9 +60,9 @@ export const Header: React.FC<HeaderProps> = ({ health, healthLoading, onRefresh
         <Box sx={{ flexGrow: 1 }} />
 
         <Stack direction="row" spacing={2} alignItems="center">
-          <Tooltip title="Статус API">
+          <Tooltip title="API Status">
             <Chip
-              label={healthLoading ? "Перевірка..." : health?.status === "ok" ? "API активний" : "API помилка"}
+              label={healthLoading ? "Checking..." : health?.status === "ok" ? "API Active" : "API Error"}
               size="medium"
               color={health?.status === "ok" ? "success" : "error"}
               sx={{
@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({ health, healthLoading, onRefresh
             />
           </Tooltip>
 
-          <Tooltip title="Оновити статус">
+          <Tooltip title="Update Status">
             <IconButton
               size="medium"
               onClick={onRefresh}

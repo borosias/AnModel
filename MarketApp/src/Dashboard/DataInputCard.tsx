@@ -98,10 +98,10 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                         </Avatar>
                         <Box>
                             <Typography variant="h6" sx={{fontWeight: 700}}>
-                                Введення даних
+                                Data Input
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
-                                Введіть дані для аналізу
+                                Enter data for analysis
                             </Typography>
                         </Box>
                     </Stack>
@@ -130,13 +130,13 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                     >
                         <Tab
                             icon={<KeyboardIcon/>}
-                            label="Ручний ввід"
+                            label="Manual Input"
                             value="manual"
                             iconPosition="start"
                         />
                         <Tab
                             icon={<DatabaseIcon/>}
-                            label="Пошук користувача"
+                            label="User Search"
                             value="db"
                             iconPosition="start"
                         />
@@ -190,10 +190,10 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                             {isLoading ? (
                                 <>
                                     <CircularProgress size={24} color="inherit" sx={{mr: 1}}/>
-                                    Аналіз...
+                                    Analyzing...
                                 </>
                             ) : (
-                                "Запустити аналіз"
+                                "Run Analysis"
                             )}
                         </Button>
 
@@ -209,7 +209,7 @@ export const DataInputCard: React.FC<DataInputCardProps> = ({
                                 fontWeight: 600,
                             }}
                         >
-                            Значення за замовчуванням
+                            Default Values
                         </Button>
                     </Stack>
 

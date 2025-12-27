@@ -8,11 +8,11 @@ from sklearn.preprocessing import RobustScaler, OrdinalEncoder, LabelEncoder
 
 
 class DataPreprocessor:
-    """Утилиты для предобработки данных"""
+    """Data preprocessing utilities"""
 
     @staticmethod
     def detect_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
-        """Определяет числовые и категориальные колонки"""
+        """Identifies numeric and categorical columns"""
         cols = [c for c in df.columns if not c.startswith("target_") and
                 c not in ("snapshot_date", "user_id", "customer_id", "snapshot")]
         num = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
@@ -22,7 +22,7 @@ class DataPreprocessor:
 
     @staticmethod
     def create_sequences(df: pd.DataFrame, context_length: int, prediction_horizon: int):
-        """Создает последовательности для временных рядов"""
+        """Creates sequences for time series"""
         sequences = []
         targets = []
 

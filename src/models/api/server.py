@@ -3,8 +3,8 @@ from __future__ import annotations
 """
 Models API Server (FastAPI)
 
-Сервер для инференса ML-моделей с автоматической документацией.
-Запуск: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+ML model inference server with automatic documentation.
+Run: uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import os
@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# ===== Настройка путей =====
+# ===== Path configuration =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
 if SRC_DIR not in sys.path:
@@ -29,7 +29,7 @@ if SRC_DIR not in sys.path:
 MODELS_DIR = os.path.join(SRC_DIR, "models", "production_models")
 DEFAULT_CONTEXT_AWARE_PATH = os.path.join(MODELS_DIR, "context_aware_model1.pkl")
 
-# Безопасная инициализация снапшота: не рушим сервер, если данных/зависимостей нет
+# Safe snapshot initialization: don't crash the server if data/dependencies are missing
 SNAPSHOT_PATH: Optional[str] = None
 try:
     daily_features_dir = os.path.join(SRC_DIR, "analytics", "data", "daily_features")
@@ -50,15 +50,15 @@ except Exception as e:
     print(f"[WARN] Failed to load daily snapshot: {e}")
     daily_snapshot = pd.DataFrame()
 
-# Предвычисленные предсказания модели для всех пользователей снапшота
+# Precomputed model predictions for all snapshot users
 predicted_users = pd.DataFrame()
 try:
     if not daily_snapshot.empty and os.path.exists(DEFAULT_CONTEXT_AWARE_PATH):
-        # Импортируем модель и считаем предсказания батчем
+        # Import model and calculate predictions in batch
         from models.models.context_aware import ContextAwareModel  # type: ignore
 
         context_model = ContextAwareModel.load(DEFAULT_CONTEXT_AWARE_PATH)
-        # daily_snapshot сейчас с индексом user_id, вернём столбец user_id для join
+        # daily_snapshot now has user_id index, return user_id column for join
         ds_with_id = daily_snapshot.reset_index(drop=False)
         preds_df = context_model.predict(ds_with_id)
         predicted_users = ds_with_id.join(preds_df)
@@ -70,12 +70,12 @@ except Exception as e:
     print(f"[WARN] Failed to precompute predictions: {e}")
     predicted_users = pd.DataFrame()
 
-# ===== Pydantic-схемы =====
+# ===== Pydantic schemas =====
 class PredictRequest(BaseModel):
-    """Запрос на предсказание."""
+    """Prediction request."""
     records: list[dict[str, Any]] = Field(
         ...,
-        description="Список записей с фичами для предсказания",
+        description="List of records with features for prediction",
         min_length=1,
         examples=[[{
             "total_events": 100,
@@ -86,15 +86,15 @@ class PredictRequest(BaseModel):
     )
     service: str | None = Field(
         default=None,
-        description="Имя сервиса/модели (опционально, по умолчанию context_aware)"
+        description="Service/model name (optional, default context_aware)"
     )
 
 
 class PredictResponse(BaseModel):
-    """Ответ с предсказаниями."""
+    """Response with predictions."""
     predictions: list[dict[str, Any]] = Field(
         ...,
-        description="Список предсказаний",
+        description="List of predictions",
         examples=[[{
             "purchase_proba": 0.73,
             "will_purchase_pred": 1,
@@ -111,43 +111,43 @@ class ServiceStatus(str, Enum):
 
 
 class ServiceInfo(BaseModel):
-    """Информация о сервисе."""
+    """Service information."""
     status: ServiceStatus
     model_path: str | None = None
     error: str | None = None
 
 
 class ServicesResponse(BaseModel):
-    """Список доступных сервисов."""
+    """List of available services."""
     services: list[str]
     details: dict[str, ServiceInfo]
 
 
 class HealthResponse(BaseModel):
-    """Ответ health check."""
+    """Health check response."""
     status: str = "ok"
 
 
 class ErrorResponse(BaseModel):
-    """Ответ с ошибкой."""
+    """Error response."""
     error: str
     details: str | None = None
 
 
 class UserDataRequest(BaseModel):
-    """Запрос данных пользователя."""
+    """User data request."""
     days: int = Field(default=30, ge=1, le=365)
-    model: str = Field(default="context_aware", description="Имя модели для которой нужны фичи")
+    model: str = Field(default="context_aware", description="Model name for which features are needed")
 
 
 class UserFeaturesResponse(BaseModel):
-    """Ответ с фичами пользователя."""
+    """Response with user features."""
     user_id: int
     features: dict[str, Any]
 
 
 class UserSearchResponse(BaseModel):
-    """Ответ при поиске пользователей."""
+    """Response when searching for users."""
     users: list[dict[str, Any]]
 
 
@@ -155,9 +155,9 @@ class User(BaseModel):
     user_uid: str
 
 
-# ===== Сервис моделей =====
+# ===== Model service =====
 class ModelService:
-    """Обёртка над моделью: динамическая загрузка класса и предикт."""
+    """Wrapper over model: dynamic class loading and predict."""
 
     def __init__(self, model_path: str, model_class_path: str) -> None:
         if not os.path.exists(model_path):
@@ -174,18 +174,18 @@ class ModelService:
             ) from e
 
     def predict(self, records: list[dict]) -> list[dict]:
-        """Предсказание по списку записей."""
+        """Prediction by record list."""
         if not records:
             return []
 
         df = pd.DataFrame.from_records(records)
         preds_df = self.model.predict(df)
 
-        # Конвертация в JSON-совместимый формат
+        # Conversion to JSON-compatible format
         return preds_df.to_dict(orient="records")
 
 
-# ===== Конфигурация сервисов =====
+# ===== Service configurations =====
 SERVICE_CONFIGS: dict[str, dict] = {
     "context_aware": {
         "model_path": os.getenv("CONTEXT_AWARE_MODEL_PATH", DEFAULT_CONTEXT_AWARE_PATH),
@@ -194,20 +194,20 @@ SERVICE_CONFIGS: dict[str, dict] = {
             "models.models.context_aware:ContextAwareModel"
         ),
     },
-    # Легко добавить новые модели:
+    # Easy to add new models:
     # "cross_region": {
     #     "model_path": os.getenv("CROSS_REGION_MODEL_PATH", "..."),
     #     "model_class_path": "models.models.cross_region:CrossRegionModel",
     # },
 }
 
-# Кэш сервисов и ошибок
+# Service and error cache
 SERVICES: dict[str, ModelService] = {}
 SERVICE_ERRORS: dict[str, str] = {}
 
 
 def get_service(name: str) -> ModelService:
-    """Получает сервис по имени с lazy-загрузкой."""
+    """Gets service by name with lazy loading."""
     if name not in SERVICE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown service: {name}")
 
@@ -229,7 +229,7 @@ def get_service(name: str) -> ModelService:
 
 
 def get_services_status() -> dict[str, ServiceInfo]:
-    """Возвращает статус всех сервисов."""
+    """Returns the status of all services."""
     status = {}
     for name, cfg in SERVICE_CONFIGS.items():
         if name in SERVICES:
@@ -250,11 +250,11 @@ def get_services_status() -> dict[str, ServiceInfo]:
     return status
 
 
-# ===== Lifespan (опциональная предзагрузка моделей) =====
+# ===== Lifespan (optional model preloading) =====
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle: можно предзагружать модели при старте."""
-    # Опционально: предзагрузка моделей
+    """Lifecycle: models can be preloaded on startup."""
+    # Optional: model preloading
     # for name in SERVICE_CONFIGS:
     #     try:
     #         get_service(name)
@@ -270,7 +270,7 @@ async def lifespan(app: FastAPI):
 # ===== FastAPI App =====
 app = FastAPI(
     title="AnModel API",
-    description="API для инференса ML-моделей маркетинговой аналитики",
+    description="API for marketing analytics ML model inference",
     version="2.0.0",
     lifespan=lifespan,
     responses={
@@ -281,7 +281,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    # Явно указываем dev-источники, чтобы браузер корректно принимал креды
+    # Explicitly specify dev sources so the browser correctly accepts credentials
     allow_origins=[
         "http://localhost:5173",
         "http://127.0.0.1:5173",
@@ -292,16 +292,16 @@ app.add_middleware(
 )
 
 
-# ===== Эндпоинты =====
+# ===== Endpoints =====
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 async def health_check():
-    """Проверка работоспособности сервера."""
+    """Server health check."""
     return HealthResponse()
 
 
 @app.get("/services", response_model=ServicesResponse, tags=["System"])
 async def list_services():
-    """Список доступных сервисов и их статус."""
+    """List of available services and their status."""
     return ServicesResponse(
         services=list(SERVICE_CONFIGS.keys()),
         details=get_services_status()
@@ -311,7 +311,7 @@ async def list_services():
 @app.get("/model-info/{service_name}", tags=["System"])
 async def get_model_info(service_name: str):
     """
-    Получить информацию о модели: ожидаемые фичи, порог классификации и т.д.
+    Get model information: expected features, classification threshold, etc.
     """
     model_service = get_service(service_name)
     model = model_service.model
@@ -323,20 +323,20 @@ async def get_model_info(service_name: str):
         "feature_importance_top10": None,
     }
 
-    # Получаем список фичей
+    # Get feature list
     if hasattr(model, "feature_columns_") and model.feature_columns_ is not None:
         info["features"] = model.feature_columns_.tolist()
 
-    # Порог классификации
+    # Classification threshold
     if hasattr(model, "optimal_threshold_"):
         info["optimal_threshold"] = model.optimal_threshold_
 
-    # Топ-10 важных фичей
+    # Top 10 important features
     if hasattr(model, "feature_importance_") and model.feature_importance_ is not None:
         top10 = model.feature_importance_.head(10).to_dict(orient="records")
         info["feature_importance_top10"] = top10
 
-    # Медианы числовых фичей (для понимания "нормальных" значений)
+    # Numeric feature medians (for understanding "normal" values)
     if hasattr(model, "numeric_medians_"):
         info["feature_medians"] = model.numeric_medians_
 
@@ -354,17 +354,17 @@ async def get_model_info(service_name: str):
 )
 async def predict(
         request: PredictRequest,
-        service: str = Query(default="context_aware", description="Имя сервиса/модели")
+        service: str = Query(default="context_aware", description="Service/model name")
 ):
     """
-    Получить предсказания модели.
+    Get model predictions.
 
-    Приоритет выбора сервиса:
+    Service selection priority:
     1. Query parameter `?service=...`
-    2. Поле `service` в теле запроса
-    3. По умолчанию: `context_aware`
+    2. `service` field in request body
+    3. Default: `context_aware`
     """
-    # Определяем сервис: query param > body > default
+    # Determine service: query param > body > default
     service_name = service or request.service or "context_aware"
 
     model_service = get_service(service_name)
@@ -399,9 +399,9 @@ async def get_pool():
 )
 async def predict_by_service(service_name: str, request: PredictRequest):
     """
-    Получить предсказания конкретной модели.
+    Get predictions for a specific model.
 
-    Путь `/predict/context_aware` эквивалентен `/predict?service=context_aware`
+    Path /predict/context_aware is equivalent to /predict?service=context_aware
     """
     model_service = get_service(service_name)
 
@@ -415,7 +415,7 @@ async def predict_by_service(service_name: str, request: PredictRequest):
 
 @app.get("/users", tags=["Users"])
 async def search_users():
-    # Если есть предвычисленные предсказания — используем их
+    # If precomputed predictions exist — use them
     if not predicted_users.empty:
         users_sorted = predicted_users.sort_values("purchase_proba", ascending=False, na_position="last")
         results = []
@@ -427,7 +427,7 @@ async def search_users():
             })
         return {"users": results}
 
-    # Fallback: старое поведение, если по какой-то причине нет снапшота/модели
+    # Fallback: old behavior if snapshot/model is missing for some reason
     try:
         df = pd.read_parquet("../../analytics/data/users/users.parquet")
         df = df.sort_values("user_uid")
@@ -467,7 +467,7 @@ async def search_users():
     return {"users": results}
 
 
-# ===== Запуск через uvicorn =====
+# ===== Run via uvicorn =====
 if __name__ == "__main__":
     import uvicorn
 
@@ -475,5 +475,5 @@ if __name__ == "__main__":
         "server:app",
         host="0.0.0.0",
         port=8000,
-        reload=True  # Для разработки
+        reload=True  # For development
     )

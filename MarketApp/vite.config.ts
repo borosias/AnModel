@@ -12,7 +12,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000', // наш Python-сервер
+        target: 'http://localhost:8000', // our Python server
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

@@ -53,9 +53,9 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
   const theme = useTheme();
 
   const graphTabs: GraphTab[] = [
-    { label: "Лінійний графік", icon: <TimelineIcon /> },
-    { label: "Стовпчикова діаграма", icon: <EqualizerIcon /> },
-    { label: "Обласний графік", icon: <AreaChartIcon /> },
+    { label: "Line Chart", icon: <TimelineIcon /> },
+    { label: "Bar Chart", icon: <EqualizerIcon /> },
+    { label: "Area Chart", icon: <AreaChartIcon /> },
   ];
 
   const renderChart = () => {
@@ -66,7 +66,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
             <XAxis
               dataKey="id"
-              label={{ value: 'Прогнози', position: 'insideBottom', offset: -5 }}
+              label={{ value: 'Predictions', position: 'insideBottom', offset: -5 }}
               stroke="#666"
             />
             <YAxis stroke="#666" />
@@ -194,7 +194,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
                 <TimelineIcon />
               </Avatar>
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                Візуалізація результатів
+                Result Visualization
               </Typography>
             </Stack>
 

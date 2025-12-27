@@ -57,14 +57,14 @@ export const StatisticsCard: React.FC<StatisticsCardProps> = ({
               <AssessmentIcon />
             </Avatar>
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              Статистика
+              Statistics
             </Typography>
           </Stack>
 
           <Stack spacing={2}>
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="body2" color="text.secondary">
-                Усього прогнозів:
+                Total Predictions:
               </Typography>
               <Chip
                 label={historyLength}
@@ -76,26 +76,26 @@ export const StatisticsCard: React.FC<StatisticsCardProps> = ({
 
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="body2" color="text.secondary">
-                Останній прогноз:
+                Last Prediction:
               </Typography>
               <Typography variant="body2" fontWeight={600}>
-                {lastPredictionDate?.toLocaleDateString('uk-UA') || "—"}
+                {lastPredictionDate?.toLocaleDateString('en-US') || "—"}
               </Typography>
             </Stack>
 
             <Stack direction="row" justifyContent="space-between" alignItems="center">
               <Typography variant="body2" color="text.secondary">
-                Активна модель:
+                Active Model:
               </Typography>
               <Typography variant="body2" fontWeight={600} color="primary">
-                {selectedService || "Не обрана"}
+                {selectedService || "Not selected"}
               </Typography>
             </Stack>
 
             {historyLength > 0 && (
               <Box>
                 <Typography variant="body2" color="text.secondary" mb={0.5}>
-                  Прогрес аналізу:
+                  Analysis Progress:
                 </Typography>
                 <LinearProgress
                   variant="determinate"

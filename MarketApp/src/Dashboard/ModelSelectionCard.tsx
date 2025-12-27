@@ -78,10 +78,10 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
               </Avatar>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 700, color: "text.primary" }}>
-                  Модель ML
+                  ML Model
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  Використовується єдина доступна модель
+                  Using the only available model
                 </Typography>
               </Box>
             </Stack>
@@ -109,11 +109,11 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
                 <Stack direction="row" spacing={1} alignItems="center" mb={1}>
                   <InfoIcon color="info" fontSize="small" />
                   <Typography variant="subtitle2" color="info.main">
-                    Активна модель: {only.name}
+                    Active Model: {only.name}
                   </Typography>
                 </Stack>
                 <Typography variant="body2" color="text.secondary">
-                  <strong>Характеристики:</strong> {modelFeatures.map(f => TRANSLATIONS[f] || f).join(", ")}
+                  <strong>Features:</strong> {modelFeatures.map(f => TRANSLATIONS[f] || f).join(", ")}
                 </Typography>
               </Paper>
             )}
@@ -156,20 +156,20 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
             </Avatar>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700, color: "text.primary" }}>
-                Вибір моделі ML
+                Select ML Model
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Оберіть алгоритм для аналізу даних
+                Select algorithm for data analysis
               </Typography>
             </Box>
           </Stack>
 
           <FormControl fullWidth size="medium">
-            <InputLabel sx={{ fontWeight: 600 }}>Оберіть модель</InputLabel>
+            <InputLabel sx={{ fontWeight: 600 }}>Select model</InputLabel>
             <Select
               value={selectedService}
               onChange={onServiceChange}
-              label="Оберіть модель"
+              label="Select model"
               disabled={servicesLoading}
               sx={{
                 borderRadius: 2,
@@ -209,11 +209,11 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
               <Stack direction="row" spacing={1} alignItems="center" mb={1}>
                 <InfoIcon color="info" fontSize="small" />
                 <Typography variant="subtitle2" color="info.main">
-                  Активна модель: {selectedService}
+                  Active Model: {selectedService}
                 </Typography>
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                <strong>Характеристики:</strong> {modelFeatures.map(f => TRANSLATIONS[f] || f).join(", ")}
+                <strong>Features:</strong> {modelFeatures.map(f => TRANSLATIONS[f] || f).join(", ")}
               </Typography>
             </Paper>
           )}

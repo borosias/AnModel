@@ -11,21 +11,21 @@ import {
     useTheme,
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import AttachMoneyIcon from '@mui/icons-material/AttachMoney'; // Заменил LocalAtmIcon на более современный
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney'; // Replaced LocalAtmIcon with a more modern one
 import TimelineIcon from '@mui/icons-material/Timeline';
-import AccessTimeIcon from '@mui/icons-material/AccessTime'; // Для временных показателей
+import AccessTimeIcon from '@mui/icons-material/AccessTime'; // For time indicators
 import PercentIcon from '@mui/icons-material/Percent';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
-// Для конверсии
-import CalculateIcon from '@mui/icons-material/Calculate'; // Для средней частоты
+// For conversion
+import CalculateIcon from '@mui/icons-material/Calculate'; // For average frequency
 import type {User} from '../types';
 
 interface UserInsightsProps {
     user?: User;
 }
 
-// Улучшенная функция форматирования для гривен
+// Improved formatting function for UAH
 function formatCurrency(val: number | undefined, digits = 0): string {
     if (val === null || val === undefined || Number.isNaN(val)) return '—';
     return val.toLocaleString('uk-UA', {
@@ -54,7 +54,7 @@ interface SegmentInfo {
 }
 
 /**
- * Статус пользователя для карточки (логика сохранена)
+ * User status for the card (logic preserved)
  */
 function getSegment(features: Record<string, any>): SegmentInfo {
     const p = Number(features.purchase_proba ?? 0);
@@ -65,48 +65,48 @@ function getSegment(features: Record<string, any>): SegmentInfo {
     if (p >= 0.7 && daysSinceLast <= 30) {
         return {
             id: 'hot',
-            label: '🔥 Гаряча аудиторія',
+            label: '🔥 Hot Audience',
             color: 'success',
-            description: `Модель дає ${(p * 100).toFixed(0)}% шанс покупки. Активний останнім часом.`,
+            description: `Model gives ${(p * 100).toFixed(0)}% chance of purchase. Recently active.`,
         };
     }
 
     if (p >= 0.3 && (events7 >= 3 || daysSinceLast <= 14)) {
         return {
             id: 'warm',
-            label: '⚡ Перспективний',
+            label: '⚡ Promising',
             color: 'info',
-            description: `Є відчутний шанс покупки (${(p * 100).toFixed(0)}%), є недавня активність.`,
+            description: `Significant chance of purchase (${(p * 100).toFixed(0)}%), recent activity present.`,
         };
     }
 
     if (p >= 0.1) {
         return {
             id: 'cold',
-            label: '🟠 Слабкий інтерес',
+            label: '🟠 Weak Interest',
             color: 'warning',
-            description: `Шанс покупки помірний (${(p * 100).toFixed(0)}%). Можна включати в масові кампанії.`,
+            description: `Purchase chance is moderate (${(p * 100).toFixed(0)}%). Can be included in mass campaigns.`,
         };
     }
 
     if (p < 0.1 && w === 0) {
         return {
             id: 'ignore',
-            label: '⛔ Нецільовий зараз',
+            label: '⛔ Non-target now',
             color: 'error',
-            description: `Модель бачить дуже низький шанс покупки (${(p * 100).toFixed(1)}%).`,
+            description: `Model sees a very low purchase chance (${(p * 100).toFixed(1)}%).`,
         };
     }
 
     return {
         id: 'cold',
-        label: '🟠 Слабкий інтерес',
+        label: '🟠 Weak Interest',
         color: 'warning',
-        description: `Шанс покупки ${(p * 100).toFixed(0)}%.`,
+        description: `Purchase chance ${(p * 100).toFixed(0)}%.`,
     };
 }
 
-// Компонент-обертка для каждой метрики
+// Wrapper component for each metric
 interface MetricBoxProps {
     icon: React.ReactNode;
     title: string;
@@ -124,11 +124,11 @@ const MetricBox: React.FC<MetricBoxProps> = ({
                                              }) => (
     <Box
         sx={{
-            p: 1.5, // Увеличенный padding для лучшей читаемости
+            p: 1.5, // Increased padding for better readability
             borderRadius: 2,
             border: '1px solid',
             borderColor: 'divider',
-            height: '100%', // Для Grid/Stack
+            height: '100%', // For Grid/Stack
         }}
     >
         <Stack spacing={0.5}>
@@ -141,11 +141,11 @@ const MetricBox: React.FC<MetricBoxProps> = ({
                     <InfoOutlinedIcon fontSize="small" color="disabled" sx={{ml: 'auto'}}/>
                 </Tooltip>
             </Stack>
-            {/* Основное значение */}
+            {/* Main value */}
             <Typography variant="h6" fontWeight={800} color="text.primary">
                 {value}
             </Typography>
-            {/* Дополнительное значение */}
+            {/* Additional value */}
             {secondaryValue && (
                 <Typography variant="caption" color="text.secondary">
                     {secondaryValue}
@@ -180,14 +180,14 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
 
     const segment = getSegment(f);
 
-    // Для мини-графика активности: доля 7д в 30д
+    // For activity mini-chart: 7d share in 30d
     const activityShare = events30 > 0 ? Math.min(100, (events7 / events30) * 100) : 0;
-// Цвет рамки для VIP/Тревоги
+// Border color for VIP/Alert
     const borderColor = willPurchasePred === 1 ? theme.palette.success.main :
         segment.color === 'error' ? theme.palette.error.main :
             theme.palette.divider;
 
-    // Мікро-тренди: розрахунки показників за останні 3 дні відносно 7 днів
+    // Micro-trends: indicator calculations for the last 3 days relative to 7 days
     const microEventGrowth = Number(f.micro_event_growth ?? NaN);
     const microPurchaseGrowth = Number(f.micro_purchase_growth ?? NaN);
     const microPurchaseRatio = Number(f.micro_purchase_ratio ?? NaN);
@@ -200,16 +200,16 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                 p: 2.5,
                 borderRadius: 3,
                 mt: 2,
-                border: '2px solid', // Утолщенная рамка для акцента
+                border: '2px solid', // Thicker border for emphasis
                 borderColor: borderColor,
             }}
         >
             <Stack spacing={3}>
-                {/* HEADER: имя + статус + вероятность */}
+                {/* HEADER: name + status + probability */}
                 <Stack direction="row" alignItems="center" justifyContent="space-between">
                     <Box>
                         <Typography variant="subtitle1" fontWeight={700}>
-                            Профіль користувача
+                            User Profile
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
                             ID: {user.user_id}
@@ -226,7 +226,7 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                         <Chip
                             size="small"
                             variant="outlined"
-                            label={`Шанс: ${(purchaseProba * 100).toFixed(0)}%`}
+                            label={`Chance: ${(purchaseProba * 100).toFixed(0)}%`}
                             sx={{
                                 fontWeight: 600,
                                 borderRadius: 1.5,
@@ -237,7 +237,7 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                     </Stack>
                 </Stack>
 
-                {/* Описание от модели */}
+                {/* Model description */}
                 <Box
                     sx={{
                         p: 1.5,
@@ -247,7 +247,7 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                     }}
                 >
                     <Typography variant="body2" fontWeight={600} color="text.primary">
-                        Інсайт моделі:
+                        Model Insight:
                     </Typography>
                     <Typography variant="body2" color="text.secondary" sx={{fontStyle: 'italic'}}>
                         {segment.description}
@@ -257,54 +257,54 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                 <Divider/>
 
                 <Typography variant="subtitle2" fontWeight={700}>
-                    🔮 Прогнози та Спадок (LTV)
+                    🔮 Predictions and Legacy (LTV)
                 </Typography>
                 <Stack direction={{xs: 'column', sm: 'row'}} spacing={2}>
                     <MetricBox
                         icon={<AttachMoneyIcon color="primary" fontSize="small"/>}
-                        title="Витрачено всього"
+                        title="Total Spent"
                         value={formatCurrency(totalSpent, 0)}
-                        tooltip="Загальна сума, витрачена клієнтом за весь час. Важливий показник LTV."
-                        secondaryValue={`Покупок: ${formatNumber(totalPurchases, 0)}`}
+                        tooltip="Total amount spent by the customer over all time. Important LTV indicator."
+                        secondaryValue={`Purchases: ${formatNumber(totalPurchases, 0)}`}
                     />
                     <MetricBox
                         icon={<AttachMoneyIcon color="success" fontSize="small"/>}
-                        title="Прогноз наступної суми"
+                        title="Predicted Next Amount"
                         value={formatCurrency(nextAmountPred, 0)}
-                        tooltip="Скільки модель очікує, що клієнт витратить під час наступної покупки."
-                        secondaryValue={`Очікується через: ${isNaN(daysToNextPred) ? '—' : `${daysToNextPred.toFixed(0)} дн.`}`}
+                        tooltip="How much the model expects the customer to spend on their next purchase."
+                        secondaryValue={`Expected in: ${isNaN(daysToNextPred) ? '—' : `${daysToNextPred.toFixed(0)} days`}`}
                     />
                     <MetricBox
                         icon={<AccessTimeIcon color="warning" fontSize="small"/>}
-                        title="Середній дохід на дію (APV)"
+                        title="Average Revenue Per Action (APV)"
                         value={`${formatNumber(avgSpendPerEvent, 2)} ₴`}
-                        tooltip="Скільки в середньому приносить кожна дія користувача (перегляд, клік, покупка). Чим вища цифра — тим цінніший клієнт."
-                        secondaryValue={`Конверсія (30 дн.): ${formatNumber(conversion30 * 100, 1)}%`}
+                        tooltip="Average revenue from each user action (view, click, purchase). Higher value indicates a more valuable customer."
+                        secondaryValue={`Conversion (30d): ${formatNumber(conversion30 * 100, 1)}%`}
                     />
                 </Stack>
 
                 <Divider/>
 
-                {/* БЛОК 2: Динамика и Активность */}
+                {/* BLOCK 2: Dynamics and Activity */}
                 <Typography variant="subtitle2" fontWeight={700}>
-                    📈 Поточна Динаміка та Поведінка
+                    📈 Current Dynamics and Behavior
                 </Typography>
                 <Stack direction={{xs: 'column', sm: 'row'}} spacing={2}>
                     <Box sx={{flex: 1}}>
                         <MetricBox
                             icon={<TimelineIcon color="info" fontSize="small"/>}
-                            title="Часова активність"
+                            title="Time Activity"
                             value={
                                 <>
-                                    7 дн: <b>{events7}</b>
+                                    7 days: <b>{events7}</b>
                                     <span style={{marginLeft: '8px', opacity: 0.6}}>|</span>
-                                    <span style={{marginLeft: '8px'}}>30 дн: <b>{events30}</b></span>
+                                    <span style={{marginLeft: '8px'}}>30 days: <b>{events30}</b></span>
                                 </>
                             }
-                            tooltip="Скільки дій зробив користувач за останні 7 та 30 днів."
+                            tooltip="Number of actions performed by the user in the last 7 and 30 days."
                             secondaryValue={
                                 <>
-                                    Останній візит: <b>{isNaN(daysSinceLast) ? '—' : `${daysSinceLast} дн.`}</b>
+                                    Last visit: <b>{isNaN(daysSinceLast) ? '—' : `${daysSinceLast} days`}</b>
                                 </>
                             }
                         />
@@ -313,15 +313,15 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                     <Box sx={{flex: 1}}>
                         <MetricBox
                             icon={<CalculateIcon color="secondary" fontSize="small"/>}
-                            title="Частота покупок"
+                            title="Purchase Frequency"
                             value={formatNumber(purchaseFrequency, 2)}
-                            tooltip="Скільки покупок у середньому припадає на активний день користувача. >1.0 означає мульти-замовлення."
-                            secondaryValue={`Частота: ${formatNumber(purchaseFrequency, 2)} покупок/день`}
+                            tooltip="Average number of purchases per active user day. >1.0 means multi-orders."
+                            secondaryValue={`Frequency: ${formatNumber(purchaseFrequency, 2)} purchases/day`}
                         />
                     </Box>
                 </Stack>
 
-                {/* БЛОК 3: Мини-График Активности */}
+                {/* BLOCK 3: Activity Mini-Chart */}
                 <Box
                     sx={{
                         p: 1.5,
@@ -336,10 +336,10 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                     <Stack direction="row" alignItems="center" spacing={1}>
                         <PercentIcon color="primary" fontSize="small"/>
                         <Typography variant="body2" fontWeight={700}>
-                            Концентрація Активності (7д vs 30д)
+                            Activity Concentration (7d vs 30d)
                         </Typography>
                         <Tooltip
-                            title="Скільки активності (подій) припадає на останній тиждень відносно всього місяця. Високе значення (близько 100%) може означати 'вибухову' активність з подальшою паузою."
+                            title="How much activity (events) occurs in the last week relative to the entire month. A high value (near 100%) may indicate 'burst' activity followed by a pause."
                             arrow
                         >
                             <InfoOutlinedIcon fontSize="small" color="disabled" sx={{ml: 'auto'}}/>
@@ -354,58 +354,58 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
                                 mt: 0.5,
                                 height: 12,
                                 borderRadius: 5,
-                                bgcolor: theme.palette.warning.light, // Фон - 30 дней
+                                bgcolor: theme.palette.warning.light, // Background - 30 days
                                 [`& .MuiLinearProgress-bar`]: {
                                     borderRadius: 5,
-                                    bgcolor: theme.palette.info.main, // Цвет - 7 дней
+                                    bgcolor: theme.palette.info.main, // Color - 7 days
                                 },
                             }}
                         />
                         <Typography variant="caption" color="text.secondary" sx={{mt: 0.5}}>
-                            {events7} з {events30} подій за 30д = **{activityShare.toFixed(0)}%**
-                            (Нормальний діапазон: 25% - 40%)
+                            {events7} of {events30} events in 30d = **{activityShare.toFixed(0)}%**
+                            (Normal range: 25% - 40%)
                         </Typography>
                     </Box>
                 </Box>
 
-                {/* Мікро-тренди */}
+                {/* Micro-trends */}
                 <Divider />
                 <Typography variant="subtitle2" fontWeight={700}>
-                    📊 Мікро-тренди (останні 3 дні)
+                    📊 Micro-trends (last 3 days)
                 </Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                     <MetricBox
                         icon={<TrendingUpIcon color="primary" fontSize="small" />}
-                        title="Приріст подій"
+                        title="Event Growth"
                         value={isNaN(microEventGrowth) ? '—' : `${(microEventGrowth * 100).toFixed(0)}%`}
-                        tooltip="Відношення кількості подій за останні 3 дні до середнього за останні 7 днів. >100% означає зростання активності."
+                        tooltip="Ratio of events in the last 3 days to the average over the last 7 days. >100% means activity growth."
                     />
                     <MetricBox
                         icon={<ShoppingCartIcon color="secondary" fontSize="small" />}
-                        title="Приріст покупок"
+                        title="Purchase Growth"
                         value={isNaN(microPurchaseGrowth) ? '—' : `${(microPurchaseGrowth * 100).toFixed(0)}%`}
-                        tooltip="Відношення кількості покупок за останні 3 дні до середнього за останні 7 днів. >100% означає зростання покупок."
+                        tooltip="Ratio of purchases in the last 3 days to the average over the last 7 days. >100% means purchase growth."
                     />
                     <MetricBox
                         icon={<PercentIcon color="info" fontSize="small" />}
-                        title="Конверсія 3д"
+                        title="3d Conversion"
                         value={isNaN(microPurchaseRatio) ? '—' : `${(microPurchaseRatio * 100).toFixed(1)}%`}
-                        tooltip="Частка покупок серед всіх дій за останні 3 дні."
+                        tooltip="Share of purchases among all actions in the last 3 days."
                     />
                     <MetricBox
                         icon={<AttachMoneyIcon color="success" fontSize="small" />}
-                        title="Приріст витрат"
+                        title="Spent Growth"
                         value={isNaN(microSpentGrowth) ? '—' : `${(microSpentGrowth * 100).toFixed(0)}%`}
-                        tooltip="Відношення суми витрат за останні 3 дні до середнього за останні 7 днів. >100% означає зростання витрат."
+                        tooltip="Ratio of spending in the last 3 days to the average over the last 7 days. >100% means spending growth."
                     />
                 </Stack>
 
                 <Typography variant="caption" color="text.secondary" sx={{mt: 1, display: 'block'}}>
-                    **Пояснення статусів:**
-                    **{theme.palette.success.main} (Зелений):** Модель очікує покупку найближчим часом.
-                    **{theme.palette.info.main} (Синій):** Висока ймовірність, але недостатньо впевнена для "гарячого" статусу.
-                    **{theme.palette.warning.main} (Помаранчевий):** Потенційна аудиторія для прогріву/ретаргетингу.
-                    **{theme.palette.error.main} (Червоний):** Низький шанс покупки; фокус на реактивацію, а не на конверсію.
+                    **Status Explanations:**
+                    **{theme.palette.success.main} (Green):** Model expects a purchase soon.
+                    **{theme.palette.info.main} (Blue):** High probability, but not confident enough for "hot" status.
+                    **{theme.palette.warning.main} (Orange):** Potential audience for warming up/retargeting.
+                    **{theme.palette.error.main} (Red):** Low purchase chance; focus on reactivation rather than conversion.
                 </Typography>
             </Stack>
         </Paper>

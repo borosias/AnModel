@@ -18,61 +18,61 @@ from postgres_load import load_users
 
 
 # ============================================================================
-# КОНФИГУРАЦИЯ РАЗНООБРАЗИЯ
+# DIVERSITY CONFIGURATION
 # ============================================================================
 @dataclass
 class DiversityConfig:
     """
-    Параметры для управления разнообразием генерируемых данных.
+    Parameters for controlling the diversity of generated data.
     """
-    # --- Активность пользователей ---
+    # --- User Activity ---
     activity_mu: float = 0.0
     activity_sigma: float = 0.7
 
     min_events_per_user: int = 5
     max_events_multiplier: float = 5.0
 
-    # --- Временное окно активности пользователя ---
+    # --- User Activity Time Window ---
     min_activity_span_days: int = 14
     max_activity_span_days: int = 365
 
-    # --- Snapshot / таргет окно ---
-    snapshot_horizon_days: int = 7  # размер окна, в котором считаем will_purchase_next_7d
-    snapshot_date: datetime | None = None  # если None, берём текущий момент
+    # --- Snapshot / Target Window ---
+    snapshot_horizon_days: int = 7  # window size for calculating will_purchase_next_7d
+    snapshot_date: datetime | None = None  # if None, take the current moment
 
     # --- Promo windows (Variant A) ---
-    promo_share: float = 0.2              # доля пользователей с промо-активацией
-    promo_window_days: int = 10           # длина окна промо перед snapshot
-    promo_purchase_boost: float = 2.5     # усиление вероятности purchase в промо-окне
-    promo_max_session_gap_days: int = 1   # максимум дней между сессиями в промо-окне
+    promo_share: float = 0.2              # share of users with promo activation
+    promo_window_days: int = 10           # length of the promo window before snapshot
+    promo_purchase_boost: float = 2.5     # boost of purchase probability in the promo window
+    promo_max_session_gap_days: int = 1   # maximum days between sessions in the promo window
 
     # --- Snapshot-aware bursts (Variant B) ---
-    burst_share: float = 0.25             # доля пользователей с целенаправленной цепочкой в последние дни
-    burst_force_purchase_prob: float = 0.8  # вероятность завершить цепочку покупкой
+    burst_share: float = 0.25             # share of users with a targeted chain in the last days
+    burst_force_purchase_prob: float = 0.8  # probability of completing the chain with a purchase
 
-    # --- Интервалы между сессиями ---
+    # --- Intervals between sessions ---
     min_days_between_sessions: int = 0
     max_days_between_sessions: int = 5
 
-    # --- Интервалы между событиями внутри сессии (секунды) ---
+    # --- Intervals between events within a session (seconds) ---
     min_seconds_between_events: int = 10
     max_seconds_between_events: int = 900
 
-    # --- Размер сессий ---
+    # --- Session Size ---
     session_size_lambda: float = 1 / 3
 
 
 # ============================================================================
-# USER COHORTS: профили пользователей для реалистичного поведения
+# USER COHORTS: user profiles for realistic behavior
 # ============================================================================
 @dataclass
 class UserCohort:
-    """Профиль когорты пользователей."""
+    """User cohort profile."""
     name: str
-    events_multiplier: float      # множитель на base events
-    span_days_range: tuple        # (min, max) дней активности
-    session_size_lambda: float    # lambda для размера сессий
-    purchase_boost: float         # множитель вероятности purchase в Markov
+    events_multiplier: float      # multiplier for base events
+    span_days_range: tuple        # (min, max) activity days
+    session_size_lambda: float    # lambda for session size
+    purchase_boost: float         # purchase probability multiplier in Markov
 
 
 USER_COHORTS = {
@@ -80,7 +80,7 @@ USER_COHORTS = {
         name="heavy",
         events_multiplier=3.0,
         span_days_range=(180, 365),
-        session_size_lambda=1/5,   # большие сессии
+        session_size_lambda=1/5,   # large sessions
         purchase_boost=1.5,
     ),
     "medium": UserCohort(
@@ -113,14 +113,14 @@ def is_flag_user(user_id: str, seed: int, ratio: float, salt: str) -> bool:
 
 
 def get_user_cohort(user_id: str, seed: int = 42) -> UserCohort:
-    """Детерминированно выбирает когорту для пользователя."""
-    # Используем hash для детерминированности
+    """Deterministically selects a cohort for a user."""
+    # Use hash for determinism
     h = hash((user_id, seed)) % len(COHORT_DISTRIBUTION)
     cohort_name = COHORT_DISTRIBUTION[h]
     return USER_COHORTS[cohort_name]
 
 
-# Дефолтный конфиг — можно переопределить через CLI или отдельный файл
+# Default config — can be overridden via CLI or a separate file
 DEFAULT_DIVERSITY = DiversityConfig()
 
 # ============================================================================
@@ -130,7 +130,7 @@ REGIONS = ["UA-30", "UA-40", "UA-50"]
 EVENTS = ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
 SEARCH_QUERIES = ["shoes", "blanket", "phone", "charger", "jacket", "backpack", "watch"]
 
-# -- Логирование --
+# -- Logging --
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -138,26 +138,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger("data-gen")
 
-# Генерируем веса для товаров по закону Ципфа (популярность убывает)
-# item_1 будет самым популярным, item_200 — самым редким.
+# Generate weights for items according to Zipf's law (popularity decreases)
+# item_1 will be the most popular, item_200 — the rarest.
 item_ranks = range(1, len(ITEMS) + 1)
-# alpha=1.5 — сильный перекос (хиты очень популярны), alpha=1.1 — более плавный
+# alpha=1.5 — strong skew (hits very popular), alpha=1.1 — smoother
 zipf_weights = [1.0 / (r ** 1.5) for r in item_ranks]
 total_weight = sum(zipf_weights)
 ITEM_PROBS = [w / total_weight for w in zipf_weights]
 
 # ============================================================================
-# MARKOV TRANSITIONS: условные вероятности следующего события
+# MARKOV TRANSITIONS: conditional probabilities of the next event
 # ============================================================================
-# Порядок EVENTS: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
-# Каждая строка — распределение вероятностей следующего события после данного
+# Order of EVENTS: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
+# Each row is the probability distribution of the next event after the given one
 MARKOV_TRANSITIONS = {
-    "page_view":     [0.15, 0.35, 0.10, 0.02, 0.18, 0.20],  # после page_view часто product_view
-    "product_view":  [0.08, 0.15, 0.35, 0.12, 0.10, 0.20],  # после product_view часто add_to_cart
-    "add_to_cart":   [0.05, 0.10, 0.15, 0.45, 0.05, 0.20],  # после add_to_cart высока вероятность purchase!
-    "purchase":      [0.30, 0.25, 0.05, 0.02, 0.18, 0.20],  # после purchase — новый цикл
-    "search":        [0.10, 0.45, 0.10, 0.02, 0.13, 0.20],  # после search часто product_view
-    "click":         [0.15, 0.35, 0.15, 0.05, 0.10, 0.20],  # после click часто product_view
+    "page_view":     [0.15, 0.35, 0.10, 0.02, 0.18, 0.20],  # after page_view often product_view
+    "product_view":  [0.08, 0.15, 0.35, 0.12, 0.10, 0.20],  # after product_view often add_to_cart
+    "add_to_cart":   [0.05, 0.10, 0.15, 0.45, 0.05, 0.20],  # after add_to_cart high probability of purchase!
+    "purchase":      [0.30, 0.25, 0.05, 0.02, 0.18, 0.20],  # after purchase — new cycle
+    "search":        [0.10, 0.45, 0.10, 0.02, 0.13, 0.20],  # after search often product_view
+    "click":         [0.15, 0.35, 0.15, 0.05, 0.10, 0.20],  # after click often product_view
 }
 
 
@@ -186,7 +186,7 @@ def make_event(
         "region": random.choice(REGIONS),
         "properties": {}
     }
-    base_price = 1000.0 / (int(item.split('_')[1]) + 1)  # Чем выше номер item, тем ниже "базовая" цена (условно)
+    base_price = 1000.0 / (int(item.split('_')[1]) + 1)  # The higher the item number, the lower the "base" price (conditionally)
     price = round(random.uniform(base_price * 0.8, base_price * 1.2), 2)
 
     if event_type in ("product_view", "add_to_cart", "purchase", "click"):
@@ -204,20 +204,20 @@ def make_event_contextual(
         current_item: str | None = None,
 ) -> dict:
     """
-    Создание события с учётом контекста сессии.
+    Creating an event taking session context into account.
 
-    Если current_item задан и событие связано с товаром (add_to_cart, purchase),
-    с высокой вероятностью используем тот же item — это создаёт реалистичные цепочки.
+    If current_item is set and the event is related to a product (add_to_cart, purchase),
+    use the same item with high probability — this creates realistic chains.
     """
-    # Решаем, использовать ли текущий item или выбрать новый
+    # Decide whether to use the current item or select a new one
     if current_item and event_type in ("add_to_cart", "purchase"):
-        # 70% — продолжаем с тем же товаром, 30% — новый
+        # 70% — continue with the same item, 30% — new
         if random.random() < 0.7:
             item = current_item
         else:
             item = random.choices(ITEMS, weights=ITEM_PROBS, k=1)[0]
     elif current_item and event_type == "click":
-        # 50% — тот же товар
+        # 50% — same item
         if random.random() < 0.5:
             item = current_item
         else:
@@ -286,9 +286,9 @@ async def produce_for_user(
         diversity: DiversityConfig,
 ):
     """
-    Генерация событий для одного пользователя с настраиваемым разнообразием.
+    Event generation for a single user with adjustable diversity.
     """
-    # --- НОВОЕ: Получаем когорту пользователя ---
+    # --- NEW: Get user cohort ---
     cohort = get_user_cohort(user_id)
 
 
@@ -299,22 +299,22 @@ async def produce_for_user(
         is_promo_user = is_flag_user(user_id, 42, diversity.promo_share, "promo")
         is_burst_user = is_flag_user(user_id, 42, diversity.burst_share, "burst")
 
-    # --- 1. Индивидуальная интенсивность (с учётом когорты) ---
+    # --- 1. Individual intensity (taking cohort into account) ---
     activity_factor = random.lognormvariate(
         mu=diversity.activity_mu,
         sigma=diversity.activity_sigma
     )
-    # Применяем множитель когорты
+    # Apply cohort multiplier
     target_events = int(events_per_user * activity_factor * cohort.events_multiplier)
     target_events = max(diversity.min_events_per_user, target_events)
     target_events = min(target_events, int(events_per_user * diversity.max_events_multiplier))
 
-    # --- 2. Временное окно активности (с учётом когорты) ---
-    # Привязываем генерацию к дате снапшота (если задана)
+    # --- 2. Activity time window (taking cohort into account) ---
+    # Bind generation to snapshot date (if set)
     now = diversity.snapshot_date or datetime.now(timezone.utc)
     year_ago = now - timedelta(days=365)
 
-    # ИСПРАВЛЕНО: безопасное вычисление span_days
+    # FIXED: safe span_days calculation
     span_min = max(diversity.min_activity_span_days, cohort.span_days_range[0])
     span_max = max(span_min, min(diversity.max_activity_span_days, cohort.span_days_range[1]))
 
@@ -332,7 +332,7 @@ async def produce_for_user(
     if user_end < now - timedelta(days=diversity.snapshot_horizon_days):
         return
 
-    # Границы таргет-окна (например, последние 7 дней перед snapshot)
+    # Target window boundaries (e.g., last 7 days before snapshot)
     target_window_start = now - timedelta(days=diversity.snapshot_horizon_days)
     promo_window_start = now - timedelta(days=diversity.promo_window_days)
 
@@ -341,12 +341,12 @@ async def produce_for_user(
     prev_event_type = None
     current_item = None
 
-    # --- 3. Генерация сессий и событий ---
+    # --- 3. Session and event generation ---
     has_purchase_last_window = False
     i = 0
     while i < target_events:
         remaining = target_events - i
-        # Используем lambda из когорты
+        # Use lambda from cohort
         session_size = min(
             remaining,
             max(1, int(random.expovariate(cohort.session_size_lambda)) + 1)
@@ -359,7 +359,7 @@ async def produce_for_user(
                 diversity.max_days_between_sessions
             )
             jump_seconds = random.randint(0, 6 * 60 * 60)
-            # В промо-окне уменьшаем разрыв между сессиями
+            # Reduce the gap between sessions in the promo window
             if is_promo_user and current_ts >= promo_window_start:
                 jump_days = min(jump_days, diversity.promo_max_session_gap_days)
             current_ts = current_ts + timedelta(days=jump_days, seconds=jump_seconds)
@@ -381,15 +381,15 @@ async def produce_for_user(
             if current_ts > user_end:
                 current_ts = user_end
 
-            # --- Markov-выбор с учётом purchase_boost когорты ---
+            # --- Markov choice taking cohort purchase_boost into account ---
             if prev_event_type is not None and prev_event_type in MARKOV_TRANSITIONS:
                 weights = list(MARKOV_TRANSITIONS[prev_event_type])
-                # Бустим вероятность purchase (индекс 3) для "покупающих" когорт
+                # Boost purchase probability (index 3) for "buying" cohorts
                 weights[3] *= cohort.purchase_boost
-                # Дополнительный буст в промо-окне
+                # Additional boost in promo window
                 if is_promo_user and current_ts >= promo_window_start:
                     weights[3] *= diversity.promo_purchase_boost
-                # Нормализуем
+                # Normalize
                 total = sum(weights)
                 weights = [w / total for w in weights]
             else:
@@ -422,7 +422,7 @@ async def produce_for_user(
                 else:
                     counters["err"] += 1
 
-            # Фиксируем покупки в целевом окне
+            # Record purchases in the target window
             if event_type == "purchase" and target_window_start <= event_ts <= now:
                 has_purchase_last_window = True
 
@@ -433,25 +433,25 @@ async def produce_for_user(
             if delay_between_events > 0:
                 await asyncio.sleep(delay_between_events)
 
-    # --- 4A. Promo window: дополнительная активность перед snapshot ---
+    # --- 4A. Promo window: additional activity before snapshot ---
     if is_promo_user:
         promo_start = max(user_start, now - timedelta(days=diversity.promo_window_days))
-        # Кол-во дополнительных сессий в промо-окно
+        # Number of additional sessions in the promo window
         extra_sessions = random.randint(1, 3)
         for _ in range(extra_sessions):
             session_id = str(uuid.uuid4())
-            # Впишем сессию в промо-диапазон
+            # Fit the session into the promo range
             base_ts = promo_start + timedelta(
                 days=random.uniform(0, max(0.1, (now - promo_start).days)),
                 seconds=random.randint(0, 12 * 60 * 60)
             )
-            # Укороченные интервалы между событиями создают плотность
+            # Shortened intervals between events create density
             session_len = random.randint(3, 8)
             prev_event_type = None
             current_item = None
             current_ts = base_ts
             for _j in range(session_len):
-                # Сильнее бустим purchase в промо
+                # Boost purchase stronger in promo
                 if prev_event_type is not None and prev_event_type in MARKOV_TRANSITIONS:
                     weights = list(MARKOV_TRANSITIONS[prev_event_type])
                     weights[3] *= (cohort.purchase_boost * diversity.promo_purchase_boost)
@@ -468,7 +468,7 @@ async def produce_for_user(
                 if event_type == "purchase" and prev_event_type not in ("add_to_cart",):
                     continue
 
-                # Более плотные события в рамках часа
+                # Denser events within an hour
                 delta_sec = random.randint(
                     max(5, diversity.min_seconds_between_events // 2),
                     max(30, diversity.min_seconds_between_events)
@@ -497,7 +497,7 @@ async def produce_for_user(
                 if delay_between_events > 0:
                     await asyncio.sleep(delay_between_events)
 
-    # --- 4B. Snapshot-aware burst: намеренная цепочка в последние дни ---
+    # --- 4B. Snapshot-aware burst: intentional chain in the last days ---
     if is_burst_user and (not has_purchase_last_window):
         session_id = str(uuid.uuid4())
         base_ts = (
@@ -508,7 +508,7 @@ async def produce_for_user(
             )
         )
         current_ts = base_ts
-        # Сценарий разогрева
+        # Warm-up scenario
         chain = ["search", "product_view", "product_view", "add_to_cart"]
         for idx, et in enumerate(chain):
             current_ts = min(now, current_ts + timedelta(seconds=random.randint(15, 90)))
@@ -523,7 +523,7 @@ async def produce_for_user(
             if delay_between_events > 0:
                 await asyncio.sleep(delay_between_events)
 
-        # Завершим покупкой с высокой вероятностью
+        # Finish with a purchase with high probability
         if random.random() < diversity.burst_force_purchase_prob and current_ts < now:
             current_ts = min(now, current_ts + timedelta(seconds=random.randint(10, 60)))
             ev = make_event_contextual(user_id, session_id, "purchase", ts=current_ts)
@@ -551,10 +551,10 @@ async def run_generation(
         diversity: DiversityConfig,
 ):
     random.seed(seed)
-    # ИЗМЕНЕНО: Более агрессивное распределение для демо
-    # Было: [0.25, 0.25, 0.10, 0.02, 0.20, 0.18] (purchase = 0.02)
-    # Стало: purchase = 0.08 (8%), add_to_cart = 0.20 (20%)
-    # Порядок: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
+    # CHANGED: More aggressive distribution for demo
+    # Was: [0.25, 0.25, 0.10, 0.02, 0.20, 0.18] (purchase = 0.02)
+    # Now: purchase = 0.08 (8%), add_to_cart = 0.20 (20%)
+    # Order: ["page_view", "product_view", "add_to_cart", "purchase", "search", "click"]
     event_distribution = [0.15, 0.25, 0.20, 0.08, 0.12, 0.20]
     sem = asyncio.Semaphore(concurrency)
     timeout_obj = aiohttp.ClientTimeout(total=None, sock_connect=5, sock_read=timeout)
@@ -610,7 +610,7 @@ def parse_args():
     p.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout (seconds)")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
 
-    # --- Параметры разнообразия ---
+    # --- Diversity parameters ---
     p.add_argument("--activity-sigma", type=float, default=0.7,
                    help="Sigma for lognormal activity distribution (0=uniform, 0.7=moderate, 1.0=high)")
     p.add_argument("--min-span-days", type=int, default=14,

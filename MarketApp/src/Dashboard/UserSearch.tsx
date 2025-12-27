@@ -40,7 +40,7 @@ interface SegmentInfo {
 }
 
 /**
- * Классификация пользователя по вероятности покупки + базовым фичам.
+ * User classification by purchase probability + basic features.
  */
 function getSegment(features: Record<string, any>): SegmentInfo {
     const p = Number(features.purchase_proba ?? 0);
@@ -48,62 +48,62 @@ function getSegment(features: Record<string, any>): SegmentInfo {
     const events7 = Number(features.events_last_7d ?? 0);
     const daysSinceLast = Number(features.days_since_last ?? 999);
 
-    // Hot — высокая вероятность и недавняя активность
+    // Hot — high probability and recent activity
     if (p >= 0.7 && daysSinceLast <= 30) {
         return {
             id: 'hot',
-            label: '🔥 Гаряча аудиторія',
+            label: '🔥 Hot Audience',
             color: 'success',
             badgeColor: '#2e7d32',
             bg: '#e8f5e9',
-            reason: `Модель дає ${(p * 100).toFixed(0)}% шанс покупки. Остання активність ${isNaN(daysSinceLast) ? '-' : daysSinceLast} дн. тому, подій за 7д: ${events7}.`,
+            reason: `Model gives ${(p * 100).toFixed(0)}% chance of purchase. Last activity ${isNaN(daysSinceLast) ? '-' : daysSinceLast} days ago, events in 7d: ${events7}.`,
         };
     }
 
-    // Warm — средняя вероятность, но есть жизнь
+    // Warm — average probability, but active
     if (p >= 0.3 && (events7 >= 3 || daysSinceLast <= 14)) {
         return {
             id: 'warm',
-            label: '⚡ Перспективний',
+            label: '⚡ Promising',
             color: 'info',
             badgeColor: '#0288d1',
             bg: '#e3f2fd',
-            reason: `Шанс покупки ${(p * 100).toFixed(0)}%. Є недавня активність і/або історія покупок.`,
+            reason: `Purchase chance ${(p * 100).toFixed(0)}%. There is recent activity and/or purchase history.`,
         };
     }
 
-    // Cold — есть какой-то шанс, но слабые сигналы
+    // Cold — some chance, but weak signals
     if (p >= 0.1) {
         return {
             id: 'cold',
-            label: '🟠 Слабкий інтерес',
+            label: '🟠 Weak Interest',
             color: 'warning',
             badgeColor: '#f57c00',
             bg: '#fff3e0',
-            reason: `Невисокий шанс (${(p * 100).toFixed(0)}%). Можна включати в масові кампанії, але не в пріоритетні.`,
+            reason: `Low chance (${(p * 100).toFixed(0)}%). Can be included in mass campaigns, but not prioritized.`,
         };
     }
 
-    // Ignore — очень низкая вероятность и/или нет активности
+    // Ignore — very low probability and/or no activity
     if (p < 0.1 && w === 0) {
         return {
             id: 'ignore',
-            label: '⛔ Нецільовий зараз',
+            label: '⛔ Non-target now',
             color: 'error',
             badgeColor: '#c62828',
             bg: '#ffebee',
-            reason: `Модель бачить дуже низький шанс (${(p * 100).toFixed(1)}%). Або немає активності, або давно не заходив.`,
+            reason: `Model sees a very low chance (${(p * 100).toFixed(1)}%). Either no activity or hasn't visited in a long time.`,
         };
     }
 
-    // Дефолт — на всякий случай
+    // Default — just in case
     return {
         id: 'cold',
-        label: '🟠 Слабкий інтерес',
+        label: '🟠 Weak Interest',
         color: 'warning',
         badgeColor: '#f57c00',
         bg: '#fff3e0',
-        reason: `Шанс покупки ${(p * 100).toFixed(0)}%.`,
+        reason: `Purchase chance ${(p * 100).toFixed(0)}%.`,
     };
 }
 
@@ -126,7 +126,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
         const query = (searchQuery || '').toLowerCase().trim();
         const base = users.slice();
 
-        // Если есть предикты, сортируем по убыванию вероятности
+        // If predictions exist, sort by descending probability
         base.sort((a, b) => {
             const fa = (a.features || {}) as Record<string, any>;
             const fb = (b.features || {}) as Record<string, any>;
@@ -148,15 +148,15 @@ export const UserSearch: React.FC<UserSearchProps> = ({
 
     return (
         <Stack spacing={2}>
-            {/* Поиск */}
+            {/* Search */}
             <Box>
                 <Typography variant="subtitle2" fontWeight={600} mb={1}>
-                    Пошук користувача
+                    User Search
                 </Typography>
                 <Stack direction="row" spacing={1}>
                     <TextField
                         fullWidth
-                        placeholder="Введіть ID користувача"
+                        placeholder="Enter User ID"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         onKeyDown={(e) => {
@@ -187,18 +187,18 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                 px: 3,
                             }}
                         >
-                            {usersLoading ? <CircularProgress size={24} /> : 'Пошук'}
+                            {usersLoading ? <CircularProgress size={24} /> : 'Search'}
                         </Button>
                     )}
                 </Stack>
             </Box>
 
-            {/* Список пользователей или лоадер */}
+            {/* User list or loader */}
             {usersLoading ? (
                 <Box sx={{p: 3, textAlign: 'center'}}>
                     <CircularProgress />
                     <Typography variant="body2" color="text.secondary" mt={1}>
-                        Пошук користувачів...
+                        Searching users...
                     </Typography>
                 </Box>
             ) : (
@@ -248,7 +248,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                             }}
                                             onClick={() => handleUserSelect(user)}
                                         >
-                                            {/* HEADER: статус + вероятность + ID */}
+                                            {/* HEADER: status + probability + ID */}
                                             <Stack
                                                 direction="row"
                                                 justifyContent="space-between"
@@ -274,7 +274,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                                 </Stack>
                                             </Stack>
 
-                                            {/* Краткое объяснение для маркетолога */}
+                                            {/* Brief explanation for marketer */}
                                             <Typography
                                                 variant="body2"
                                                 sx={{
@@ -288,7 +288,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
 
                                             <Divider sx={{borderStyle: 'dashed', opacity: 0.5}} />
 
-                                            {/* Три ключевые цифры: давность, активность, деньги */}
+                                            {/* Three key figures: recency, activity, money */}
                                             <Box
                                                 sx={{
                                                     display: 'grid',
@@ -297,10 +297,10 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                                     alignItems: 'center',
                                                 }}
                                             >
-                                                {/* Давность */}
+                                                {/* Recency */}
                                                 <Box sx={{textAlign: 'center'}}>
                                                     <Typography variant="caption" color="text.secondary" display="block">
-                                                        Остання активність
+                                                        Last Activity
                                                     </Typography>
                                                     <Typography
                                                         variant="h6"
@@ -313,11 +313,11 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                                                 : 'text.primary'
                                                         }
                                                     >
-                                                        {isNaN(daysSinceLast) ? '—' : `${daysSinceLast} дн. тому`}
+                                                        {isNaN(daysSinceLast) ? '—' : `${daysSinceLast} days ago`}
                                                     </Typography>
                                                 </Box>
 
-                                                {/* Активность 7д / покупки */}
+                                                {/* Activity 7d / purchases */}
                                                 <Box
                                                     sx={{
                                                         textAlign: 'center',
@@ -327,7 +327,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                                     }}
                                                 >
                                                     <Typography variant="caption" color="text.secondary" display="block">
-                                                        Активність 7д
+                                                        Activity 7d
                                                     </Typography>
                                                     <Typography variant="h6" sx={{lineHeight: 1.2}}>
                                                         {events7}
@@ -337,14 +337,14 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                                         color="text.secondary"
                                                         fontSize="0.7rem"
                                                     >
-                                                        Покупок всього: {totalPurchases}
+                                                        Total purchases: {totalPurchases}
                                                     </Typography>
                                                 </Box>
 
-                                                {/* Деньги */}
+                                                {/* Money */}
                                                 <Box sx={{textAlign: 'center'}}>
                                                     <Typography variant="caption" color="text.secondary" display="block">
-                                                        Витратив
+                                                        Spent
                                                     </Typography>
                                                     <Typography variant="h6" sx={{lineHeight: 1.2}}>
                                                         {(spentTotal / 1000).toFixed(1)}k₴
@@ -363,7 +363,7 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                                 })
                             ) : (
                                 <Alert severity="info" sx={{borderRadius: 2}}>
-                                    Користувачів не знайдено. Спробуйте інший запит.
+                                    Users not found. Try another query.
                                 </Alert>
                             )}
                         </Stack>
@@ -371,28 +371,28 @@ export const UserSearch: React.FC<UserSearchProps> = ({
                 )
             )}
 
-            {/* Инфо по поиску */}
+            {/* Search info */}
             {searchQuery.trim() && !usersLoading && filteredUsers.length === 0 && (
                 <Alert severity="info" sx={{borderRadius: 2}}>
-                    Користувачів не знайдено. Спробуйте інший запит.
+                    Users not found. Try another query.
                 </Alert>
             )}
 
             {userId && (
                 <Fade in={!!userId}>
                     <Alert severity="success" sx={{borderRadius: 2}} icon={<CheckCircleIcon />}>
-                        Обрано користувача: {userId}
+                        User selected: {userId}
                     </Alert>
                 </Fade>
             )}
 
             <Typography variant="caption" color="text.secondary">
                 {users.length === 0
-                    ? 'Немає користувачів'
-                    : `Знайдено користувачів: ${users.length}`}
+                    ? 'No users'
+                    : `Users found: ${users.length}`}
                 {searchQuery.trim() &&
                     filteredUsers.length > 0 &&
-                    ` (відфільтровано: ${filteredUsers.length})`}
+                    ` (filtered: ${filteredUsers.length})`}
             </Typography>
         </Stack>
     );
