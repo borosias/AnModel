@@ -256,9 +256,8 @@ export const UserInsights: React.FC<UserInsightsProps> = ({user}) => {
 
                 <Divider/>
 
-                {/* БЛОК 1: Прогнозы Модели и Наследие */}
                 <Typography variant="subtitle2" fontWeight={700}>
-                    🔮 Прогнози та Наследие (LTV)
+                    🔮 Прогнози та Спадок (LTV)
                 </Typography>
                 <Stack direction={{xs: 'column', sm: 'row'}} spacing={2}>
                     <MetricBox

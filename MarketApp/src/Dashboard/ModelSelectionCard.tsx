@@ -78,7 +78,7 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
               </Avatar>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 700, color: "text.primary" }}>
-                  Модель AI
+                  Модель ML
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   Використовується єдина доступна модель
@@ -93,7 +93,7 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
                 <StatusIcon status={only.detail.status} />
               )}
               <Typography variant="caption" color="text.secondary">
-                {only?.detail?.features?.length || 0} характеристик
+                {modelFeatures.length || 0} features
               </Typography>
             </Stack>
             {only && modelFeatures.length > 0 && (
@@ -156,7 +156,7 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
             </Avatar>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700, color: "text.primary" }}>
-                Вибір моделі AI
+                Вибір моделі ML
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Оберіть алгоритм для аналізу даних
@@ -188,7 +188,7 @@ export const ModelSelectionCard: React.FC<ModelSelectionCardProps> = ({
                       </Stack>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">
-                      {option.detail.features?.length || 0} характеристик
+                      {option.detail.features?.length || 0} features
                     </Typography>
                   </Stack>
                 </MenuItem>
