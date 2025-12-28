@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """
-Экспорт таблицы users из Postgres в Parquet.
+Export users table from Postgres to Parquet.
 
-Запуск из корня проекта:
+Run from project root:
     python MarketApp/src/analytics/export_users_to_parquet.py
 
-Переменные окружения (с дефолтами):
+Environment variables (with defaults):
     PG_HOST=localhost
     PG_PORT=5432
     PG_DB=analytics
@@ -14,7 +14,7 @@
     PG_SCHEMA=public
     USERS_TABLE=users
 
-Выход:
+Output:
     MarketApp/src/analytics/data/users/users.parquet
 """
 
@@ -38,7 +38,7 @@ def get_pg_engine():
 
 
 def cast_uuid_columns_to_str(df: pd.DataFrame, uuid_columns: List[str]) -> pd.DataFrame:
-    """Приводит указанные UUID‑колонки к строкам, чтобы pyarrow не падал."""
+    """Casts specified UUID columns to strings to prevent pyarrow from crashing."""
     df = df.copy()
     for col in uuid_columns:
         if col in df.columns:
@@ -47,7 +47,7 @@ def cast_uuid_columns_to_str(df: pd.DataFrame, uuid_columns: List[str]) -> pd.Da
 
 
 def export_users():
-    # Пути
+    # Paths
     base_dir = Path(__file__).resolve().parent          # MarketApp/src/analytics
     out_dir = base_dir / "data" / "users"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -65,8 +65,8 @@ def export_users():
 
     print(f"Loaded {len(df):,} users, columns: {list(df.columns)}")
 
-    # Явно конвертируем UUID‑колонки в строки
-    # В твоём postgres_init.sql колонка называется user_uid
+    # Explicitly convert UUID columns to strings
+    # In your postgres_init.sql the column is named user_uid
     df = cast_uuid_columns_to_str(df, uuid_columns=["user_uid"])
 
     print(f"Writing to {out_path} ...")

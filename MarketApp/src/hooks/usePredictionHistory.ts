@@ -15,7 +15,7 @@ export const usePredictionHistory = () => {
         }));
         setHistory(historyData.slice(0, 20));
       } catch (e) {
-        console.error("Помилка завантаження історії:", e);
+        console.error("Error loading history:", e);
       }
     }
   }, []);

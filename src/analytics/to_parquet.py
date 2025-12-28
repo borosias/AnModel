@@ -24,7 +24,7 @@ def export_data_fast():
     now = datetime.utcnow()
     start_ts = (now - timedelta(days=DAYS)).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Получаем данные одним запросом с итерацией
+    # Get data with a single query using iteration
     query = """
             SELECT event_id, \
                    event_type, \
@@ -43,12 +43,12 @@ def export_data_fast():
     part = 0
     total_rows = 0
 
-    # Используем итератор для обработки батчами
+    # Use iterator for batch processing
     for rows in client.execute_iter(query, {'start_ts': start_ts}, chunk_size=BATCH):
         if not rows:
             continue
 
-        # Создаем PyArrow Table напрямую (быстрее чем через Pandas)
+        # Create PyArrow Table directly (faster than via Pandas)
         arrays = [
             pa.array([row[0] for row in rows]),  # event_id
             pa.array([row[1] for row in rows]),  # event_type

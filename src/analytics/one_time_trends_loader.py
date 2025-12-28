@@ -13,21 +13,21 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_results(results: dict, queries: list, region: str) -> list:
-    """Парсим результаты из SerpAPI с правильным форматом дат"""
+    """Parse results from SerpAPI with correct date format"""
     trends = []
 
     def _parse_date(date_str_raw: str):
         """
-        Поддержка форматов:
+        Support formats:
           - 'Jun 4, 2025'
           - 'Dec 1–7, 2024'
           - 'Dec 29, 2024–Jan 4, 2025'
-        Берём первую дату интервала.
+        Take the first date of the interval.
         """
         if not date_str_raw:
             return None
 
-        # Нормализуем странные юникод‑символы (узкий пробел, длинное тире и т.п.)
+        # Normalize strange unicode characters (narrow space, long dash, etc.)
         s = (
             date_str_raw
             .replace('\u2009', ' ')  # narrow no‑break space
@@ -38,28 +38,28 @@ def _parse_results(results: dict, queries: list, region: str) -> list:
             .strip()
         )
 
-        # 1) Пытаемся как обычную дату 'Jun 4, 2025'
+        # 1) Try as a regular date 'Jun 4, 2025'
         try:
             return datetime.strptime(s, '%b %d, %Y').date()
         except ValueError:
             pass
 
-        # 2) Популярный формат 'Dec 1-7, 2024'
-        #    Берём первую часть до дефиса, плюс год справа.
+        # 2) Popular format 'Dec 1-7, 2024'
+        #    Take the first part before the hyphen, plus the year on the right.
         try:
-            # s может быть 'Dec 1-7, 2024' или 'Dec 29, 2024-Jan 4, 2025'
-            # Берём год из конца строки (последние 4 цифры)
+            # s can be 'Dec 1-7, 2024' or 'Dec 29, 2024-Jan 4, 2025'
+            # Take the year from the end of the string (last 4 digits)
             year = s[-4:]
             if not year.isdigit():
                 raise ValueError
 
-            # Часть до запятой
+            # Part before the comma
             if ',' in s:
-                left_part = s.split(',', 1)[0]  # 'Dec 1-7' или 'Dec 29, 2024-Jan 4'
+                left_part = s.split(',', 1)[0]  # 'Dec 1-7' or 'Dec 29, 2024-Jan 4'
             else:
                 left_part = s
 
-            # Если есть дефис, берём всё слева от него ('Dec 1')
+            # If there is a hyphen, take everything to the left of it ('Dec 1')
             if '-' in left_part:
                 left_part = left_part.split('-', 1)[0].strip()
 
@@ -83,7 +83,7 @@ def _parse_results(results: dict, queries: list, region: str) -> list:
             if date is None:
                 continue
 
-            # Для каждого запроса в батче
+            # For each query in the batch
             values = day_data.get("values", [])
             print(f"📈 Date: {date}, Values count: {len(values)}")
 
@@ -125,9 +125,9 @@ class OneTimeTrendsLoader:
         self.regions = ["UA-30", "UA-40", "UA-50"]
 
     def load_all_trends_once(self, days_back: int = 365):
-        """Один раз загружаем все тренды и сохраняем в parquet"""
+        """Load all trends once and save to parquet"""
 
-        # Проверяем, не загружено ли уже
+        # Check if already loaded
         master_file = self.storage_path / "trends_master.parquet"
         if master_file.exists():
             logger.info("Trends already loaded! Reading from existing file...")
@@ -142,7 +142,7 @@ class OneTimeTrendsLoader:
         date_range = f"{start_date.strftime('%Y-%m-%d')} {end_date.strftime('%Y-%m-%d')}"
 
         for region in self.regions:
-            for i in range(0, len(self.queries), 5):  # Группируем по 5 запросов
+            for i in range(0, len(self.queries), 5):  # Group by 5 queries
                 batch_queries = self.queries[i:i + 5]
                 queries_str = ",".join(batch_queries)
 
@@ -168,23 +168,23 @@ class OneTimeTrendsLoader:
 
                     logger.info(f"✅ Got {len(trends_data)} records for this batch")
 
-                    # Пауза между запросами
+                    # Pause between queries
                     time.sleep(2)
 
                 except Exception as e:
                     logger.error(f"Failed for {queries_str} in {region}: {e}")
                     continue
 
-        # Сохраняем в parquet
+        # Save to parquet
         if all_trends:
             df = pd.DataFrame(all_trends)
             df = self._add_features(df)
 
-            # НОРМАЛИЗУЕМ СХЕМУ ДЛЯ parquet
+            # NORMALIZE SCHEMA FOR parquet
             df['date'] = pd.to_datetime(df['date']).dt.normalize()
             df['popularity'] = pd.to_numeric(df['popularity'], errors='coerce').fillna(0).astype(int)
 
-            # Убедимся, что базовые колонки присутствуют
+            # Ensure base columns are present
             base_cols = ['date', 'query', 'region', 'popularity']
             for col in base_cols:
                 if col not in df.columns:
@@ -201,11 +201,11 @@ class OneTimeTrendsLoader:
             return pd.DataFrame()
 
     def _add_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Добавляем ML фичи"""
+        """Add ML features"""
         if df.empty:
             return df
 
-        # Сортируем для оконных функций
+        # Sort for window functions
         df = df.sort_values(['query', 'region', 'date'])
 
         result_dfs = []
@@ -213,15 +213,15 @@ class OneTimeTrendsLoader:
         for (query, region), group in df.groupby(['query', 'region']):
             group = group.copy().sort_values('date')
 
-            # Скользящие средние
+            # Moving averages
             group['popularity_7d_avg'] = group['popularity'].rolling(7, min_periods=1).mean()
             group['popularity_30d_avg'] = group['popularity'].rolling(30, min_periods=1).mean()
 
-            # Изменения
+            # Changes
             group['popularity_change_1d'] = group['popularity'].pct_change().fillna(0)
             group['popularity_change_7d'] = group['popularity'].pct_change(7).fillna(0)
 
-            # Простой тренд (разница между первым и последним)
+            # Simple trend (difference between first and last)
             if len(group) > 1:
                 group['trend_slope'] = (group['popularity'].iloc[-1] - group['popularity'].iloc[0]) / len(group)
             else:
@@ -232,7 +232,7 @@ class OneTimeTrendsLoader:
         return pd.concat(result_dfs, ignore_index=True)
 
     def get_trends_data(self) -> pd.DataFrame:
-        """Просто возвращаем данные из parquet"""
+        """Just return data from parquet"""
         master_file = self.storage_path / "trends_master.parquet"
 
         if not master_file.exists():
@@ -242,11 +242,11 @@ class OneTimeTrendsLoader:
         return pd.read_parquet(master_file)
 
 
-# Простой usage
+# Simple usage
 if __name__ == "__main__":
     print("🚀 Starting trends loader...")
 
-    # Затем основную загрузку:
+    # Then the main load:
     loader = OneTimeTrendsLoader()
     df = loader.load_all_trends_once(days_back=365)
 
@@ -257,11 +257,11 @@ if __name__ == "__main__":
         print(f"🔍 Queries: {df['query'].unique().tolist()}")
         print(f"🌍 Regions: {df['region'].unique().tolist()}")
 
-        # Покажем пример данных
+        # Show data sample
         print("\n📋 Sample data:")
         print(df.head(10))
 
-        # Сохраняем статистику
+        # Save statistics
         stats_file = Path("./trends_data/loading_stats.json")
         stats = {
             'loaded_at': datetime.now().isoformat(),

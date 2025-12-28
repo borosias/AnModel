@@ -39,14 +39,14 @@ CH_DATABASE = os.getenv("CLICKHOUSE_DB", "analytics")
 CH_USER = os.getenv("CLICKHOUSE_USER", "admin")
 CH_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "admin")
 
-# Более консервативные настройки для Windows
+# More conservative settings for Windows
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 5000))
 BATCH_TIMEOUT = float(os.getenv("BATCH_TIMEOUT", 0.5))
-MAX_INFLIGHT_INSERTS = int(os.getenv("MAX_INFLIGHT_INSERTS", 2))  # Уменьшил для Windows
+MAX_INFLIGHT_INSERTS = int(os.getenv("MAX_INFLIGHT_INSERTS", 2))  # Reduced for Windows
 GETMANY_TIMEOUT_MS = int(os.getenv("GETMANY_TIMEOUT_MS", 200))
 STATS_INTERVAL = float(os.getenv("STATS_INTERVAL", 2.0))
 
-# Глобальные метрики
+# Global metrics
 processed_total = 0
 processed_recent = 0
 recent_start_time = time.time()
@@ -55,7 +55,7 @@ throughput_history = deque(maxlen=20)
 
 
 class ClickHousePool:
-    """Пул соединений для ClickHouse"""
+    """Connection pool for ClickHouse"""
 
     def __init__(self):
         self._pool = []
@@ -63,7 +63,7 @@ class ClickHousePool:
         self._max_connections = MAX_INFLIGHT_INSERTS
 
     def get_client(self):
-        """Получить клиент из пула или создать новый"""
+        """Get client from pool or create a new one"""
         with self._lock:
             if self._pool:
                 return self._pool.pop()
@@ -71,7 +71,7 @@ class ClickHousePool:
                 return self._create_client()
 
     def return_client(self, client):
-        """Вернуть клиент в пул"""
+        """Return client to pool"""
         with self._lock:
             if len(self._pool) < self._max_connections:
                 self._pool.append(client)
@@ -79,7 +79,7 @@ class ClickHousePool:
                 client.disconnect()
 
     def _create_client(self):
-        """Создать новый клиент ClickHouse"""
+        """Create a new ClickHouse client"""
         return Client(
             host=CH_HOST,
             port=CH_PORT,
@@ -96,7 +96,7 @@ class ClickHousePool:
         )
 
     def close_all(self):
-        """Закрыть все соединения"""
+        """Close all connections"""
         with self._lock:
             for client in self._pool:
                 client.disconnect()
@@ -104,11 +104,11 @@ class ClickHousePool:
 
 
 def normalize_event_fast(ev: dict):
-    """Ультра-быстрая нормализация с минимальными проверками"""
+    """Ultra-fast normalization with minimal checks"""
     props = ev.get("properties", {})
     ts_str = ev.get("timestamp", "")
 
-    # Быстрое преобразование timestamp
+    # Fast timestamp conversion
     try:
         if 'Z' in ts_str:
             ts_str = ts_str.replace('Z', '+00:00')
@@ -116,7 +116,7 @@ def normalize_event_fast(ev: dict):
     except Exception:
         ts_parsed = datetime.utcnow()
 
-    # Быстрое извлечение price
+    # Fast price extraction
     price = props.get("price")
     if price is not None:
         try:
@@ -170,7 +170,7 @@ def ensure_table():
 
 
 async def run_insert_in_executor(ch_pool, batch):
-    """Вставка с использованием пула соединений"""
+    """Insertion using connection pool"""
 
     def _do_insert():
         client = None
@@ -195,20 +195,20 @@ async def run_insert_in_executor(ch_pool, batch):
 async def consumer_loop():
     global processed_total, processed_recent, recent_start_time
 
-    # Инициализация пула ClickHouse
+    # ClickHouse pool initialization
     ch_pool = ClickHousePool()
 
-    # Kafka consumer с более консервативными настройками
+    # Kafka consumer with more conservative settings
     consumer = AIOKafkaConsumer(
         KAFKA_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP,
         group_id="clickhouse-consumer-group",
         enable_auto_commit=False,
         auto_offset_reset="earliest",
-        fetch_max_bytes=10 * 1024 * 1024,  # 10MB вместо 100MB
-        max_partition_fetch_bytes=5 * 1024 * 1024,  # 5MB вместо 50MB
+        fetch_max_bytes=10 * 1024 * 1024,  # 10MB instead of 100MB
+        max_partition_fetch_bytes=5 * 1024 * 1024,  # 5MB instead of 50MB
         fetch_max_wait_ms=100,
-        max_poll_records=5000,  # Уменьшил для стабильности
+        max_poll_records=5000,  # Reduced for stability
         session_timeout_ms=30000,
         heartbeat_interval_ms=5000,
     )
@@ -225,18 +225,18 @@ async def consumer_loop():
 
     try:
         while True:
-            # Получаем сообщения с таймаутом
+            # Get messages with timeout
             msgs = await consumer.getmany(timeout_ms=GETMANY_TIMEOUT_MS, max_records=2000)
 
             for tp, records in msgs.items():
                 if not records:
                     continue
 
-                # Сохраняем offset для коммита
+                # Save offset for commit
                 last_offset = records[-1].offset
                 pending_offsets[tp] = last_offset + 1
 
-                # Обработка сообщений
+                # Message processing
                 for rec in records:
                     try:
                         payload = loads(rec.value)
@@ -250,11 +250,11 @@ async def consumer_loop():
 
             now = time.time()
 
-            # Условия для флаша батча
+            # Batch flush conditions
             should_flush = (
                     len(buffer) >= BATCH_SIZE or
                     (now - last_flush) >= BATCH_TIMEOUT or
-                    len(buffer) > 10000  # Защита от переполнения
+                    len(buffer) > 10000  # Overflow protection
             )
 
             if buffer and should_flush and len(inflight_tasks) < MAX_INFLIGHT_INSERTS:
@@ -262,7 +262,7 @@ async def consumer_loop():
                 buffer = buffer[BATCH_SIZE:] if len(buffer) > BATCH_SIZE else []
                 last_flush = now
 
-                # Запускаем вставку
+                # Start insertion
                 task = asyncio.create_task(
                     _process_batch(
                         ch_pool=ch_pool,
@@ -274,7 +274,7 @@ async def consumer_loop():
                 inflight_tasks.add(task)
                 task.add_done_callback(inflight_tasks.discard)
 
-            # Очищаем завершенные задачи
+            # Clean up completed tasks
             done_tasks = [t for t in inflight_tasks if t.done()]
             for task in done_tasks:
                 try:
@@ -285,7 +285,7 @@ async def consumer_loop():
                     logger.error(f"Task failed: {e}")
                 inflight_tasks.discard(task)
 
-            # Коммит каждые N успешных вставок
+            # Commit every N successful insertions
             if successful_inserts_since_commit >= commit_every_n:
                 try:
                     await consumer.commit()
@@ -294,7 +294,7 @@ async def consumer_loop():
                 except Exception as e:
                     logger.error(f"Commit failed: {e}")
 
-            # Статистика
+            # Statistics
             if time.time() - recent_start_time >= STATS_INTERVAL:
                 recent_elapsed = time.time() - recent_start_time
                 recent_rate = processed_recent / recent_elapsed if recent_elapsed > 0 else 0
@@ -312,7 +312,7 @@ async def consumer_loop():
                 processed_recent = 0
                 recent_start_time = time.time()
 
-            # Небольшая пауза для кооперативной многозадачности
+            # Small pause for cooperative multitasking
             if not msgs and not buffer:
                 await asyncio.sleep(0.01)
 
@@ -322,7 +322,7 @@ async def consumer_loop():
     finally:
         logger.info("Shutting down...")
 
-        # Финальный флаш буфера
+        # Final buffer flush
         if buffer:
             logger.info(f"Flushing final batch of {len(buffer)} events")
             try:
@@ -331,7 +331,7 @@ async def consumer_loop():
             except Exception as e:
                 logger.error(f"Final insert failed: {e}")
 
-        # Ожидаем завершения всех задач
+        # Wait for all tasks to complete
         if inflight_tasks:
             logger.info(f"Waiting for {len(inflight_tasks)} inflight tasks")
             await asyncio.gather(*inflight_tasks, return_exceptions=True)
@@ -342,7 +342,7 @@ async def consumer_loop():
 
 
 async def _process_batch(ch_pool, batch, consumer, pending_offsets):
-    """Обрабатывает батч и коммитит при необходимости"""
+    """Processes batch and commits if necessary"""
     try:
         count, success = await run_insert_in_executor(ch_pool, batch)
 

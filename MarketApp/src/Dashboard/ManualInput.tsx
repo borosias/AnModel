@@ -22,7 +22,7 @@ export const ManualInput: React.FC<ManualInputProps> = ({
   if (modelFeatures.length === 0) {
     return (
       <Alert severity="info" sx={{ borderRadius: 2 }}>
-        Оберіть модель для відображення полів вводу
+        Select a model to display input fields
       </Alert>
     );
   }
@@ -81,7 +81,7 @@ export const ManualInput: React.FC<ManualInputProps> = ({
                     startAdornment: adornment,
                   }
             }
-            helperText={isLast ? 'Текстове поле (обов\'язково)' : undefined}
+            helperText={isLast ? 'Text field (required)' : undefined}
           />
         );
       })}

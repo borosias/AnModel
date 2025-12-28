@@ -27,9 +27,9 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
 
   const handleStartAnalysis = () => {
     if (!selectedService) {
-      setError("Спочатку оберіть модель!");
+      setError("Select a model first!");
     } else if (modelFeatures.length === 0) {
-      setError("Завантажте характеристики моделі!");
+      setError("Load model features!");
     } else {
       onResetToDefault();
     }
@@ -58,10 +58,10 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           }}
         />
         <Typography variant="h5" color="text.contrastText" gutterBottom sx={{ fontWeight: 600 }}>
-          Дані для аналізу відсутні
+          No data for analysis
         </Typography>
         <Typography variant="body1" color="text.contrastText" paragraph>
-          Оберіть модель, введіть дані та запустіть перший аналіз
+          Select a model, enter data, and start the first analysis
         </Typography>
         <Button
           variant="contained"
@@ -77,7 +77,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           }}
           onClick={handleStartAnalysis}
         >
-          Почати аналіз
+          Start Analysis
         </Button>
       </CardContent>
     </Card>

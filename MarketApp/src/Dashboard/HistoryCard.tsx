@@ -56,17 +56,17 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
                             </Avatar>
                             <Box>
                                 <Typography variant="h6" sx={{fontWeight: 700}}>
-                                    Історія аналізу
+                                    Analysis History
                                 </Typography>
                                 <Typography variant="caption" color="text.secondary">
-                                    Останні {Math.min(history.length, 20)} прогнозів
+                                    Last {Math.min(history.length, 20)} predictions
                                 </Typography>
                             </Box>
                         </Stack>
 
                         <Stack direction="row" spacing={1} alignItems="center">
                             <Chip
-                                label={`${history.length} записів`}
+                                label={`${history.length} records`}
                                 size="medium"
                                 color="warning"
                                 variant="outlined"
@@ -85,7 +85,7 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
                                         fontWeight: 600,
                                     }}
                                 >
-                                    Очистити
+                                    Clear
                                 </Button>
                             )}
                         </Stack>
@@ -119,14 +119,14 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
                                         borderBottom: `2px solid ${alpha(theme.palette.primary.main, 0.2)}`,
                                     }
                                 }}>
-                                    <TableCell>Дата</TableCell>
-                                    <TableCell>Час</TableCell>
-                                    <TableCell>Модель</TableCell>
-                                    <TableCell>ID користувача</TableCell>
-                                    <TableCell>Вірогідність покупки</TableCell>
-                                    <TableCell>Чи буде покупка?</TableCell>
-                                    <TableCell>Дні до наступної покупки</TableCell>
-                                    <TableCell>Приблизна сума</TableCell>
+                                    <TableCell>Date</TableCell>
+                                    <TableCell>Time</TableCell>
+                                    <TableCell>Model</TableCell>
+                                    <TableCell>User ID</TableCell>
+                                    <TableCell>Purchase Probability</TableCell>
+                                    <TableCell>Will Purchase?</TableCell>
+                                    <TableCell>Days to Next Purchase</TableCell>
+                                    <TableCell>Estimated Amount</TableCell>
                                 </TableRow>
                             </TableHead>
                             <TableBody>
@@ -147,12 +147,12 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
                                     >
                                         <TableCell>
                                             <Typography variant="body2" fontWeight={500}>
-                                                {item.timestamp.toLocaleDateString('uk-UA')}
+                                                {item.timestamp.toLocaleDateString('en-US')}
                                             </Typography>
                                         </TableCell>
                                         <TableCell>
                                             <Typography variant="body2">
-                                                {item.timestamp.toLocaleTimeString('uk-UA', {
+                                                {item.timestamp.toLocaleTimeString('en-US', {
                                                     hour: '2-digit',
                                                     minute: '2-digit'
                                                 })}
@@ -169,7 +169,7 @@ export const HistoryCard: React.FC<HistoryCardProps> = ({
                                         </TableCell>
                                         <TableCell>
                                             <Typography variant="body2" fontWeight={600} maxWidth={150} sx={{overflow: 'hidden', textOverflow: 'ellipsis', textWrap: 'nowrap'}} >
-                                                {item.user_id ? `${item.user_id}` : "Ручний ввід"}
+                                                {item.user_id ? `${item.user_id}` : "Manual Input"}
                                             </Typography>
                                         </TableCell>
                                         {item.output && Object.entries(item.output[0]).map(([key, value]) => (

@@ -113,7 +113,7 @@ export default function Dashboard() {
             });
             setInputData(initialData);
         } catch (error) {
-            console.error("Помилка завантаження інформації про модель:", error);
+            console.error("Error loading model info:", error);
             const defaultFeatures = ["total_events", "total_purchases", "days_since_last_event"];
             setModelFeatures(defaultFeatures);
 
@@ -127,7 +127,7 @@ export default function Dashboard() {
 
     const handleLoadUserData = async (user: User) => {
         try {
-            // 1. Формируем правильный объект данных из юзера
+            // 1. Form a correct data object from the user
             const modelInput = modelFeatures.reduce<Record<string, any>>((acc, feature) => {
                 const value = user.features?.[feature as keyof Features];
 
@@ -145,19 +145,19 @@ export default function Dashboard() {
                 return acc;
             }, {});
 
-            // 2. Обновляем UI (асинхронно)
+            // 2. Update UI (asynchronously)
             setInputData(modelInput);
-            setUserId(user.user_id); // Важно: обновляем ID юзера
+            setUserId(user.user_id); // Important: update user ID
             setError("");
             setIsLoading(true);
 
             if (!selectedService) {
-                setError("Будь ласка, спочатку виберіть модель");
+                setError("Please select a model first");
                 setIsLoading(false);
                 return;
             }
 
-            // 3. Валидация локальной переменной modelInput (а не стейта)
+            // 3. Validation of the local variable modelInput (not state)
             const invalidFields = modelFeatures.filter(feature => {
                 const value = modelInput[feature];
                 if (
@@ -173,14 +173,14 @@ export default function Dashboard() {
             });
 
             if (invalidFields.length > 0) {
-                setError(`Будь ласка, введіть коректні значення для полів: ${invalidFields.join(", ")}`);
+                setError(`Please enter correct values for fields: ${invalidFields.join(", ")}`);
                 setIsLoading(false);
                 return;
             }
 
-            // 4. ПРЕДИКТ: Используем modelInput, так как inputData еще не обновился!
+            // 4. PREDICT: Use modelInput, as inputData hasn't updated yet!
         } catch (error: any) {
-            setError(`Помилка завантаження даних: ${error.message}`);
+            setError(`Error loading data: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -191,12 +191,12 @@ export default function Dashboard() {
         setIsLoading(true);
 
         if (!selectedService) {
-            setError("Будь ласка, спочатку виберіть модель");
+            setError("Please select a model first");
             setIsLoading(false);
             return;
         }
 
-        // Корректная валидация: строковые last_* поля не считаем числами
+        // Correct validation: string last_* fields are not considered numbers
         const invalidFields = modelFeatures.filter(feature => {
             const value = inputData[feature];
 
@@ -206,16 +206,16 @@ export default function Dashboard() {
                 feature === "last_region" ||
                 feature === "snapshot_date"
             ) {
-                // Для строковых полей достаточно, чтобы значение вообще было (может быть пустой строкой)
+                // For string fields, it's enough that the value exists (can be an empty string)
                 return value === null || value === undefined;
             }
 
-            // Для числовых полей проверяем, что можно привести к числу
+            // For numeric fields, check if it can be converted to a number
             return value === undefined || isNaN(Number(value));
         });
 
         if (invalidFields.length > 0) {
-            setError(`Будь ласка, введіть коректні значення для полів: ${invalidFields.join(", ")}`);
+            setError(`Please enter correct values for fields: ${invalidFields.join(", ")}`);
             setIsLoading(false);
             return;
         }
@@ -234,7 +234,7 @@ export default function Dashboard() {
                 user_id: userId || undefined,
             });
         } catch (error: any) {
-            setError(`Мережева помилка: ${error.message}`);
+            setError(`Network error: ${error.message}`);
         } finally {
             setIsLoading(false);
         }
@@ -245,7 +245,7 @@ export default function Dashboard() {
 
         modelFeatures.forEach(feature => {
             switch (feature) {
-                // Основные
+                // Basic
                 case "total_events":
                     defaultData[feature] = 150;
                     break;
@@ -257,12 +257,12 @@ export default function Dashboard() {
                     break;
                 case "days_since_last":
                     defaultData[feature] = 1;
-                    break; // Активный юзер
+                    break; // Active user
                 case "days_since_first":
                     defaultData[feature] = 60;
                     break;
 
-                // Rolling (Важно для новой модели)
+                // Rolling (Important for the new model)
                 case "events_last_7d":
                     defaultData[feature] = 20;
                     break;
@@ -276,12 +276,12 @@ export default function Dashboard() {
                     defaultData[feature] = 1000;
                     break;
 
-                // Тренды
+                // Trends
                 case "trend_popularity_mean":
                     defaultData[feature] = 50;
                     break;
 
-                // Строковые
+                // String
                 case "last_event_type":
                     defaultData[feature] = "click";
                     break;
@@ -419,7 +419,7 @@ export default function Dashboard() {
                                 API: {import.meta.env.VITE_API_BASE || "http://localhost:8000"}
                             </Typography>
                             <Typography variant="caption" color="text.contrastText">
-                                Моделей: {services?.services?.length || 0}
+                                Models: {services?.services?.length || 0}
                             </Typography>
                         </Stack>
                     </Stack>
