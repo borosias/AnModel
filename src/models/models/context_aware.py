@@ -6,7 +6,7 @@ Core ideas:
 - IMPORTANT: scale ONLY seq_emb_* features (StandardScaler), because these are embeddings.
 - Keep everything else the same to avoid instability and extra iterations.
 
-Changes vs your v3.2:
+Changes vs v3.2:
 - Added feature groups (tabular/micro/sequence)
 - Added seq feature scaler (fit + infer)
 - Added seq_feature_cols_ persistence
