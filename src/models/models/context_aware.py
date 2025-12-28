@@ -250,7 +250,7 @@ class ContextAwareModel:
         return study.best_params
 
     def fit(self, train_df: pd.DataFrame, val_df: Optional[pd.DataFrame] = None) -> Dict:
-        self._log("🚀 Training ContextAwareModel v3.3 (Hybrid Ready)...")
+        self._log("Training ContextAwareModel v3.3 (Hybrid Ready)...")
 
         X_raw, y_clf, y_days, y_amount = self._split_features_targets(train_df)
         X = self._prepare_features_fit(X_raw)
@@ -258,7 +258,7 @@ class ContextAwareModel:
         # --- 1. CLASSIFIER ---
         if HAS_LIGHTGBM:
             if self.use_optuna:
-                self._log("🔍 Tuning classifier...")
+                self._log("Tuning classifier...")
                 self.best_params_clf_ = self._optimize_classifier(X.values, y_clf.values)
                 self.best_params_clf_["class_weight"] = "balanced"
             else:
@@ -284,7 +284,7 @@ class ContextAwareModel:
         best_idx = int(np.argmax(f1))
         calc_threshold = float(thresholds[best_idx]) if len(thresholds) > best_idx else 0.5
         self.optimal_threshold_ = min(calc_threshold, 0.6)
-        self._log(f"📊 Threshold: {self.optimal_threshold_:.3f}")
+        self._log(f"Threshold: {self.optimal_threshold_:.3f}")
 
         # --- 2. REGRESSORS ---
         X_reg = X.values
@@ -333,7 +333,7 @@ class ContextAwareModel:
 
         # Optional: log groups sizes (useful and safe)
         self._log(
-            f"🧩 Feature groups: tabular={len(self.feature_groups_['tabular'])}, "
+            f"Feature groups: tabular={len(self.feature_groups_['tabular'])}, "
             f"micro={len(self.feature_groups_['micro_trend'])}, "
             f"seq={len(self.feature_groups_['sequence'])}"
         )

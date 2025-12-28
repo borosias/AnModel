@@ -63,7 +63,7 @@ def save_plot(fig, name: str) -> None:
     path = os.path.join(EXPERIMENT_DIR, name)
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    logger.info(f"📈 Saved plot: {path}")
+    logger.info(f"Saved plot: {path}")
 
 
 def evaluate_full(model: ContextAwareModel, df: pd.DataFrame) -> tuple[dict, np.ndarray]:
@@ -162,7 +162,7 @@ def plot_proba_hist(proba: np.ndarray) -> None:
 
 
 def main() -> None:
-    logger.info("📂 Loading datasets...")
+    logger.info("Loading datasets...")
     train_df = load_dataset("train")
     val_df = load_dataset("val")
     test_df = load_dataset("test")
@@ -185,15 +185,15 @@ def main() -> None:
 
     # Train model
     model = ContextAwareModel(verbose=True)
-    logger.info("🚀 Training model...")
+    logger.info("Training model...")
     model.fit(train_df, val_df=val_df)
 
     # Evaluate on validation set
-    logger.info("📊 Validation evaluation...")
+    logger.info("Validation evaluation...")
     val_metrics, val_proba = evaluate_full(model, val_df)
 
     # Evaluate on test set
-    logger.info("🧪 Test evaluation...")
+    logger.info("Test evaluation...")
     test_metrics, test_proba = evaluate_full(model, test_df)
 
     all_metrics = {
@@ -203,7 +203,7 @@ def main() -> None:
     with open(os.path.join(EXPERIMENT_DIR, "metrics.json"), "w") as f:
         json.dump(all_metrics, f, indent=2)
 
-    logger.info("📈 Metrics summary:")
+    logger.info("Metrics summary:")
     for split, metrics in all_metrics.items():
         logger.info(f"--- {split.upper()} ---")
         for k, v in metrics.items():
@@ -216,11 +216,11 @@ def main() -> None:
     plot_proba_hist(val_proba)
 
     # Save model
-    logger.info(f"💾 Saving model → {MODEL_PATH}")
+    logger.info(f"Saving model - {MODEL_PATH}")
     os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
     model.save(MODEL_PATH)
 
-    logger.info("✅ Training pipeline finished successfully")
+    logger.info("Training pipeline finished successfully")
 
 
 if __name__ == "__main__":
