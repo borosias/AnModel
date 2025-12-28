@@ -289,7 +289,17 @@ UI за замовчуванням відкриється на:
      ```
 
 4) Генератор:
-   - запуск: `python src/data_gen/generate.py --url http://localhost:8001/collect`
+   - запуск: `python src/data_gen/generate.py \
+  --url http://localhost:8000/collect \
+  --events-per-user 200 \
+  --concurrency 100 \
+  --delay 0.0 \
+  --timeout 3.0 \
+  --seed 42 \
+  --activity-sigma 0.7 \
+  --min-span-days 14 \
+  --max-span-days 365 \
+  --max-session-gap-days 5`
    - перевірка: у логах consumer має зростати throughput; у ClickHouse — `count()`.
 
 5) Export → Parquet:
